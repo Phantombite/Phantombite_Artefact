@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<Definitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <CubeBlocks>
+        <!-- Space Artefact - Mysteriöses radioaktives Artefakt -->
+        <Definition xsi:type="MyObjectBuilder_JumpDriveDefinition">
+            <Id>
+                <TypeId>JumpDrive</TypeId>
+                <SubtypeId>SpaceArtefact</SubtypeId>
+            </Id>
+            <DisplayName>Space Artefact</DisplayName>
+            <Icon>Textures\GUI\Icons\SpaceArtefact.png</Icon>
+            <Description>Mysteriöses Space Artefact</Description>
+            <Public>true</Public>
+            <AvailableInSurvival>true</AvailableInSurvival>
+            <CubeSize>Large</CubeSize>
+            <BlockTopology>TriangleMesh</BlockTopology>
+            <Size x="3" y="3" z="3"/>
+            <ModelOffset x="0" y="0" z="0"/>
+            <Model>Models\Cubes\large\SpaceArtefact\SpaceArtefact.mwm</Model>
+            <Components>
+                <Component Subtype="SteelPlate" Count="5000"/>
+                <Component Subtype="MetalGrid" Count="3000"/>
+                <Component Subtype="GravityGenerator" Count="2000"/>
+                <Component Subtype="AdminChip" Count="1000" />
+                <Component Subtype="Detector" Count="1500"/>
+                <Component Subtype="PowerCell" Count="4000"/>
+                <Component Subtype="Superconductor" Count="10000"/>
+                <Component Subtype="Computer" Count="3000"/>
+                <Component Subtype="Construction" Count="2000"/>
+                <Component Subtype="SteelPlate" Count="5000"/>
+            </Components>
+            <CriticalComponent Subtype="AdminChip" Index="0"/>
+            <MountPoints>
+                <MountPoint Side="Bottom" StartX="0.00" StartY="0.00" EndX="3.00" EndY="3.00"/>
+            </MountPoints>
+            <BuildProgressModels>
+                <Model BuildPercentUpperBound="0.33" File="Models\Cubes\large\SpaceArtefact\SpaceArtefact_BS1.mwm"/>
+                <Model BuildPercentUpperBound="0.67" File="Models\Cubes\large\SpaceArtefact\SpaceArtefact_BS2.mwm"/>
+                <Model BuildPercentUpperBound="1.00" File="Models\Cubes\large\SpaceArtefact\SpaceArtefact_BS3.mwm"/>
+            </BuildProgressModels>
+            <BlockPairName>SpaceArtefact</BlockPairName>
+            <MirroringY>Z</MirroringY>
+            <MirroringZ>Y</MirroringZ>
+            <EdgeType>Light</EdgeType>
+            <BuildTimeSeconds>120</BuildTimeSeconds>
+            <DamageEffectName>Damage_WeapExpl_Damaged</DamageEffectName>
+            <DamagedSound>ParticleWeapExpl</DamagedSound>
+            <ResourceSinkGroup>Charging</ResourceSinkGroup>
+            <RequiredPowerInput>300</RequiredPowerInput>
+            <PowerNeededForJump>30</PowerNeededForJump>
+            <MaxJumpDistance>4200000</MaxJumpDistance>
+            <MaxJumpMass>9999999999999999999999999</MaxJumpMass>
+            <EmissiveColorPreset>Ganymede_StarDrive</EmissiveColorPreset>
+            <DestroyEffect>Explosion_Warhead_30</DestroyEffect>
+            <DestroySound>WepLrgWarheadExpl</DestroySound>
+            <PCU>100</PCU>
+            <IsAirTight>true</IsAirTight>
+        </Definition>
+    </CubeBlocks>
+</Definitions>
