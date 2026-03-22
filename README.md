@@ -1,2 +1,2 @@
-# Phantombite-Artefact
+# Phantombite_Artefact
 Space Engineers Mod
