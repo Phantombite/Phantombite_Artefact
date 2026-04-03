@@ -97,10 +97,10 @@
             <ParticleScale>1</ParticleScale>
             <LightningIntervalMin>0.5</LightningIntervalMin>
             <LightningIntervalMax>2</LightningIntervalMax>
-            <LightningCharacterHitIntervalMin>30</LightningCharacterHitIntervalMin>
-            <LightningCharacterHitIntervalMax>120</LightningCharacterHitIntervalMax>
-            <LightningGridHitIntervalMin>30</LightningGridHitIntervalMin>
-            <LightningGridHitIntervalMax>60</LightningGridHitIntervalMax>
+            <LightningCharacterHitIntervalMin>10</LightningCharacterHitIntervalMin>
+            <LightningCharacterHitIntervalMax>40</LightningCharacterHitIntervalMax>
+            <LightningGridHitIntervalMin>10</LightningGridHitIntervalMin>
+            <LightningGridHitIntervalMax>30</LightningGridHitIntervalMax>
             <LightningRodSafetyRadius>20</LightningRodSafetyRadius>
             <Lightning>
                 <MaxLife>7</MaxLife>
@@ -108,7 +108,7 @@
                 <BoltParts>50</BoltParts>
                 <BoltVariation>90</BoltVariation>
                 <BoltRadius>30</BoltRadius>
-                <Damage>80</Damage>
+                <Damage>100</Damage>
                 <Sound>WM_Lightning</Sound>
                 <Color>
                     <X>100</X>
@@ -116,7 +116,7 @@
                     <Z>100</Z>
                     <W>1000</W>
                 </Color>
-                <ExplosionRadius>0.3</ExplosionRadius>
+                <ExplosionRadius>2.0</ExplosionRadius>
             </Lightning>		
             <WindOutputModifier>2.25</WindOutputModifier>
             <SolarOutputModifier>0.1</SolarOutputModifier>

@@ -14,53 +14,23 @@ using VRage.ObjectBuilders;
 using VRage.Utils;
 using VRageMath;
 
-namespace SpaceArtefact
+namespace PhantombiteArtefact.Modules
 {
-    // ============================================================
-    //  SpaceArtefact – v3 (Dune Server Edition)
-    //
-    //  ZUSTÄNDE:
-    //    INAKTIV     Block platziert, /artefact=off oder noch nie aktiviert
-    //                → Schwarz, keine Rotation, kein Trigger
-    //
-    //    IDLE        /artefact=on, kein Spieler in Reichweite
-    //                → Grün, langsame Rotation
-    //
-    //    AUFLADEN    Spieler betritt 50m Zone ODER Random-Trigger
-    //                → Rot wandert Center→Inner→Middle→Outer
-    //                → Alien-Nachricht
-    //                → Am Ende: Schockwelle + ArtefactStorm
-    //
-    //    WETTER      ArtefactStorm läuft (300 Sek)
-    //                → Orange, schnelle Rotation
-    //                → Wiederholende Nachbeben-Impulse
-    //                → DOT 20 HP/Sek für Spieler innerhalb 5m zu Fuß
-    //
-    //  TRIGGER:
-    //    Spieler-Trigger: einmalig pro Annäherung, Cooldown = Wetterdauer
-    //    Random-Trigger:  alle 30-60 Min wenn kein Wetter aktiv
-    //
-    //  COMMANDS (Admin-only):
-    //    /artefact=on      → Aktivieren
-    //    /artefact=off     → Deaktivieren
-    //    /artefact=reset   → Alles zurücksetzen
-    //    /artefact=trigger → Manuell Schockwelle auslösen
-    // ============================================================
-
     [MyEntityComponentDescriptor(typeof(MyObjectBuilder_JumpDrive), false,
         "SpaceArtefact", "SpaceArtefactT2", "SpaceArtefactT3")]
-    public class SpaceArtefactController : MyGameLogicComponent
+    public class ArtefactController : MyGameLogicComponent
     {
+        private const string MODULE = "Artefact_Controller";
+
         // ──────────────────────────────────────────────────────────
         //  KONFIGURATION
         // ──────────────────────────────────────────────────────────
 
-        // ── CONFIG DEFAULTS (werden aus Custom Data geladen) ──────
-        private const string DEFAULT_CONFIG = 
+        private const string DEFAULT_CONFIG =
             "[SpaceArtefact]\n" +
             "ID=0                    ; Artefakt-ID (0 = Standard)\n" +
             "Status=off              ; on = aktiv, off = deaktiviert\n" +
-            "TriggerRange=50         ; Meter - Spieler löst Aufladung aus\n" +
+            "TriggerRange=50         ; Meter - Spieler loest Aufladung aus\n" +
             "DotDamage=20            ; HP pro Sekunde bei sehr nahem Aufenthalt\n" +
             "DotRange=5              ; Meter - Radius fuer DOT Schaden\n" +
             "BatteryDrainBase=0.45   ; Basis-Drain beim ersten Impuls (0.45 = 45%)\n" +
@@ -68,68 +38,42 @@ namespace SpaceArtefact
             "BatteryDrainRange=300   ; Meter - Reichweite des Batterie-Drains (max 300m)\n" +
             "WeatherDuration=300     ; Sekunden - Dauer des globalen ArtefactStorm Wetters\n" +
             "TriggerInterval=216000  ; Ticks - Intervall zwischen Random-Trigger Wuerfen (216000 = 1 Stunde)\n" +
-            "TriggerChance=20        ; Prozent - Wahrscheinlichkeit beim Wuerfeln (20 = 20%)\n" +
-            "\n" +
-            "; ── COMMANDS (nur Admins) ──────────────────────────────\n" +
-            "; !spaceartefact on          - Artefakt aktivieren (ID=0)\n" +
-            "; !spaceartefact off         - Artefakt deaktivieren (ID=0)\n" +
-            "; !spaceartefact reset       - Alles zuruecksetzen + Wetter entfernen (ID=0)\n" +
-            "; !spaceartefact trigger     - Manuell Schockwelle ausloesen (ID=0)\n" +
-            "; !spaceartefact 1 on        - Artefakt mit ID=1 aktivieren\n" +
-            "; !spaceartefact 1 off       - Artefakt mit ID=1 deaktivieren\n" +
-            "; !spaceartefact 1 reset     - Artefakt mit ID=1 zuruecksetzen\n" +
-            "; !spaceartefact 1 trigger   - Artefakt mit ID=1 manuell ausloesen\n";
+            "TriggerChance=20        ; Prozent - Wahrscheinlichkeit beim Wuerfeln (20 = 20%)\n";
 
-        // Feste Konstante
         private const string WEATHER_ARTEFACT = "ArtefactStorm";
 
-        // Laufzeit-Konfig (aus Custom Data geladen)
-        private int   _artefactId          = 0;
-        private float _rangeTrigger        = 50f;
-        private float _rangeDot            = 5f;
-        private float _dotDamagePerTick    = 10f;   // 20 HP/Sek bei 30-Tick Intervall
-        private float _batteryDrainBase    = 0.45f;
-        private float _batteryDrainStep    = 0.05f;
-        private float _batteryDrainRange   = 300f;
-        private int   _weatherDuration     = 300;
-        private int   _triggerInterval     = 216000;
-        private int   _triggerChance       = 20;
+        private int   _artefactId        = 0;
+        private float _rangeTrigger      = 50f;
+        private float _rangeDot          = 5f;
+        private float _dotDamagePerTick  = 10f;
+        private float _batteryDrainBase  = 0.45f;
+        private float _batteryDrainStep  = 0.05f;
+        private float _batteryDrainRange = 300f;
+        private int   _weatherDuration   = 300;
+        private int   _triggerInterval   = 216000;
+        private int   _triggerChance     = 20;
 
-        // Timings
-        private int COOLDOWN_TICKS => _weatherDuration * 60; // = Wetterdauer
-        private const int CHECK_INTERVAL         = 30;   // Spieler-Check alle 0.5 Sek
-        private const int CHARGE_STEP_TICKS      = 60;   // 1 Sek pro Auflade-Step
-        private const int AFTERSHOCK_STEP_TICKS  = 40;   // Nachbeben-Step
-        private const int AFTERSHOCK_PAUSE_TICKS = 360;  // 6 Sek Pause zwischen Nachbeben
+        private int COOLDOWN_TICKS => _weatherDuration * 60;
+        private const int CHECK_INTERVAL         = 30;
+        private const int CHARGE_STEP_TICKS      = 60;
+        private const int AFTERSHOCK_STEP_TICKS  = 40;
+        private const int AFTERSHOCK_PAUSE_TICKS = 360;
 
-        // ──────────────────────────────────────────────────────────
-        //  RANDOM-TRIGGER KONFIGURATION
-        //  Werte werden aus Custom Data geladen (siehe DEFAULT_CONFIG)
-        //  Frühester möglicher Abstand zwischen zwei Triggern = _triggerInterval
-        // ──────────────────────────────────────────────────────────
+        private const float ROT_IDLE_RING   = 1.0f; private const float ROT_IDLE_GLOB   = 0.5f;
+        private const float ROT_CHARGE_RING = 3.0f; private const float ROT_CHARGE_GLOB = 2.0f;
+        private const float ROT_STORM_RING  = 4.0f; private const float ROT_STORM_GLOB  = 2.5f;
+        private const float ROT_MAX_RING    = 6.0f; private const float ROT_MAX_GLOB    = 4.0f;
 
-        // Rotation
-        private const float ROT_IDLE_RING    = 1.0f;  private const float ROT_IDLE_GLOB    = 0.5f;
-        private const float ROT_CHARGE_RING  = 3.0f;  private const float ROT_CHARGE_GLOB  = 2.0f;
-        private const float ROT_STORM_RING   = 4.0f;  private const float ROT_STORM_GLOB   = 2.5f;
-        private const float ROT_MAX_RING     = 6.0f;  private const float ROT_MAX_GLOB     = 4.0f;
-
-        // Glow
         private const float GLOW_MIN         = 1.5f;
         private const float GLOW_MAX         = 3.5f;
         private const float GLOW_PULSE_IDLE  = 0.02f;
         private const float GLOW_PULSE_STORM = 0.05f;
 
-        // Farben
         private static readonly Color COLOR_GREEN  = new Color(0, 255, 0)   * 3.0f;
         private static readonly Color COLOR_ORANGE = new Color(255, 140, 0) * 3.0f;
         private static readonly Color COLOR_RED    = new Color(255, 0, 0)   * 3.0f;
 
-        // Alien-Nachrichten
-        private const string MSG_PLAYER =
-            "Kre'shah... voth'nal... zim'kora eth'win... nor'tal bin'kess...";
-
-        // Random-Trigger: gestaffelte Nachrichten (je 2 Sek = 120 Ticks)
+        private const string MSG_PLAYER = "Kre'shah... voth'nal... zim'kora eth'win... nor'tal bin'kess...";
         private static readonly string[] MSG_RANDOM_SEQUENCE = new string[]
         {
             "Kre'shah... voth'nal...",
@@ -141,9 +85,7 @@ namespace SpaceArtefact
             "...M O R T !!!"
         };
 
-        // Subparts
-        private static readonly string[] SUBPART_NAMES =
-            { "OuterRing_section_1", "MiddleRing", "InnerRing" };
+        private static readonly string[] SUBPART_NAMES = { "OuterRing_section_1", "MiddleRing", "InnerRing" };
         private static readonly Vector3 AXIS_OUTER  = Vector3.Forward;
         private static readonly Vector3 AXIS_MIDDLE = Vector3.Right;
         private static readonly Vector3 AXIS_INNER  = Vector3.Down;
@@ -154,69 +96,74 @@ namespace SpaceArtefact
         // ──────────────────────────────────────────────────────────
 
         private IMyFunctionalBlock _block;
-        private bool _active = false;  // Startet INAKTIV
-        private bool _msgHandlerRegistered;
+        private bool _active           = false;
+        private bool _fullyInitialized = false;
         private bool _dmgHandlerRegistered;
         private Random _rng = new Random();
 
+        // Logger von Artefact_Command
+        private ArtefactCommandModule _logger;
+
         // Timer
         private int _frameTick    = 0;
-        private int _weatherTimer = 0;   // > 0 = Wetter aktiv
-        private int _cooldown     = 0;   // Verhindert Re-Trigger
-        private int _randomTimer  = 0;   // Countdown bis Random-Trigger
+        private int _weatherTimer = 0;
+        private int _cooldown     = 0;
+        private int _randomTimer  = 0;
 
-        // Spieler-Nähe
+        // Spieler
         private bool _playerInRange  = false;
         private bool _shockwaveFired = false;
+        private int  _hitCount       = 0;
 
-        // Hit-Counter für Batterie-Skalierung
-        private int _hitCount = 0;
-
-        // Rotation (smooth)
-        private float  _rotSpeed         = ROT_IDLE_RING;
-        private float  _rotSpeedTarget   = ROT_IDLE_RING;
-        private float  _globalSpeed      = ROT_IDLE_GLOB;
+        // Rotation
+        private float  _rotSpeed          = ROT_IDLE_RING;
+        private float  _rotSpeedTarget    = ROT_IDLE_RING;
+        private float  _globalSpeed       = ROT_IDLE_GLOB;
         private float  _globalSpeedTarget = ROT_IDLE_GLOB;
-        private Matrix _globalMatrix     = Matrix.Identity;
+        private Matrix _globalMatrix      = Matrix.Identity;
 
         // Glow
         private float _glowIntensity  = 2.0f;
         private bool  _glowReverse    = false;
         private float _glowPulseSpeed = GLOW_PULSE_IDLE;
 
+        // Trace: letzte Rotation für Änderungs-Erkennung
+        private float  _lastRotTarget = -1f;
+        private string _lastRotGrund  = "";
+
         // Subpart-Cache
         private struct SubpartInfo { public Matrix LocalMatrix; public bool Init; }
-        private readonly Dictionary<string, SubpartInfo> _subparts =
-            new Dictionary<string, SubpartInfo>();
+        private readonly Dictionary<string, SubpartInfo> _subparts = new Dictionary<string, SubpartInfo>();
 
         // Impulse
         private enum ImpulsePhase { Idle, Charging, Aftershock }
         private ImpulsePhase _impulsePhase = ImpulsePhase.Idle;
-        private int  _impulseStep  = 0;
-        private int  _impulseTimer = 0;
-        private bool _impulsePause = false;
+        private int  _impulseStep   = 0;
+        private int  _impulseTimer  = 0;
+        private bool _impulsePause  = false;
         private int  _stepDuration;
         private int  _pauseDuration;
         private bool _isRandomTrigger = false;
 
-        // Random-Nachrichten Sequenz
-        private int  _randomMsgIndex = 0;
-        private int  _randomMsgTimer = 0;
+        // Random-Nachrichten
+        private int  _randomMsgIndex  = 0;
+        private int  _randomMsgTimer  = 0;
         private bool _randomMsgActive = false;
-        private const int RANDOM_MSG_INTERVAL = 120; // 2 Sek in Ticks
+        private const int RANDOM_MSG_INTERVAL = 120;
 
-        // Delayed Damage (nur für DOT, kein Schockwellen-Spielerschaden)
-        private class DelayedDamage
-        {
-            public IMyCharacter Target;
-            public float        Damage;
-            public int          TicksLeft;
-        }
+        // Delayed Damage
+        private class DelayedDamage { public IMyCharacter Target; public float Damage; public int TicksLeft; }
         private readonly List<DelayedDamage> _delayedDamages = new List<DelayedDamage>();
 
         // Sound
         private MyEntity3DSoundEmitter _chargeEmitter;
         private bool _chargeSoundActive;
+
+        // ──────────────────────────────────────────────────────────
+        //  LOGGER
+        // ──────────────────────────────────────────────────────────
+
+        public void SetLogger(ArtefactCommandModule logger) { _logger = logger; }
 
         // ──────────────────────────────────────────────────────────
         //  INITIALISIERUNG
@@ -231,14 +178,9 @@ namespace SpaceArtefact
         {
             _block = Entity as IMyFunctionalBlock;
             if (_block == null) return;
-
-            // EACH_FRAME starten - Custom Data wird im ersten UpdateBeforeSimulation geschrieben
             NeedsUpdate = MyEntityUpdateEnum.EACH_FRAME;
         }
 
-        private bool _fullyInitialized = false;
-
-        // Zweiter Init-Frame — CustomData ist jetzt verfügbar
         // ──────────────────────────────────────────────────────────
         //  CONFIG LADEN / SPEICHERN
         // ──────────────────────────────────────────────────────────
@@ -248,44 +190,52 @@ namespace SpaceArtefact
             try
             {
                 string data = _block.CustomData;
-
-                // Erste Initialisierung - Default Config schreiben
                 if (string.IsNullOrWhiteSpace(data) || !data.Contains("[SpaceArtefact]"))
                 {
                     _block.CustomData = DEFAULT_CONFIG;
                     data = DEFAULT_CONFIG;
+                    _logger?.Trace(MODULE, "Custom Data leer — Default Config geschrieben");
                 }
 
                 foreach (var line in data.Split('\n'))
                 {
-                    // Kommentare und leere Zeilen überspringen
                     string trimmed = line.Trim();
                     if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith(";")) continue;
-
-                    // Key=Value parsen (Kommentar nach Wert abschneiden)
                     int eq = trimmed.IndexOf('=');
                     if (eq < 0) continue;
                     string key = trimmed.Substring(0, eq).Trim().ToLower();
                     string val = trimmed.Substring(eq + 1).Trim();
-                    // Inline-Kommentar abschneiden
                     int sc = val.IndexOf(';');
                     if (sc >= 0) val = val.Substring(0, sc).Trim();
 
                     switch (key)
                     {
-                        case "id":              int.TryParse(val, out _artefactId);                         break;
-                        case "status":          _active = val.ToLower() == "on";                            break;
-                        case "triggerrange":    float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _rangeTrigger);      break;
-                        case "dotdamage":       float dotDmg; if (float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out dotDmg)) _dotDamagePerTick = dotDmg / 2f; break;
-                        case "dotrange":        float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _rangeDot);         break;
-                        case "batterydrainbase":float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _batteryDrainBase); break;
-                        case "batterydrainstep":float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _batteryDrainStep); break;
+                        case "id":               int.TryParse(val, out _artefactId);                                                                                                     break;
+                        case "status":           _active = val.ToLower() == "on";                                                                                                        break;
+                        case "triggerrange":     float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _rangeTrigger);     break;
+                        case "dotdamage":        float dotDmg; if (float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out dotDmg)) _dotDamagePerTick = dotDmg / 2f; break;
+                        case "dotrange":         float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _rangeDot);         break;
+                        case "batterydrainbase": float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _batteryDrainBase);  break;
+                        case "batterydrainstep": float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _batteryDrainStep);  break;
                         case "batterydrainrange":float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _batteryDrainRange); break;
-                        case "weatherduration": int.TryParse(val, out _weatherDuration);                    break;
-                        case "triggerinterval": int.TryParse(val, out _triggerInterval);                    break;
-                        case "triggerchance":   int.TryParse(val, out _triggerChance);                      break;
+                        case "weatherduration":  int.TryParse(val, out _weatherDuration);                                                                                                break;
+                        case "triggerinterval":  int.TryParse(val, out _triggerInterval);                                                                                                break;
+                        case "triggerchance":    int.TryParse(val, out _triggerChance);                                                                                                  break;
                     }
                 }
+
+                _logger?.Debug(MODULE, "Config geladen — " +
+                    "ID=" + _artefactId +
+                    " Status=" + (_active ? "on" : "off") +
+                    " TriggerRange=" + _rangeTrigger + "m" +
+                    " DotDamage=" + (_dotDamagePerTick * 2f) + "HP/s" +
+                    " DotRange=" + _rangeDot + "m" +
+                    " DrainBase=" + (_batteryDrainBase * 100f).ToString("F0") + "%" +
+                    " DrainStep=" + (_batteryDrainStep * 100f).ToString("F0") + "%" +
+                    " DrainRange=" + _batteryDrainRange + "m" +
+                    " WeatherDuration=" + _weatherDuration + "s" +
+                    " TriggerInterval=" + _triggerInterval + " Ticks" +
+                    " TriggerChance=" + _triggerChance + "%");
             }
             catch { }
         }
@@ -300,13 +250,13 @@ namespace SpaceArtefact
                 foreach (var line in lines)
                 {
                     string trimmed = line.Trim();
-                    if (trimmed.ToLower().StartsWith("status=") || 
-                        trimmed.ToLower().StartsWith("status ="))
+                    if (trimmed.ToLower().StartsWith("status=") || trimmed.ToLower().StartsWith("status ="))
                         result.AppendLine("Status=" + (active ? "on" : "off") + "              ; on = aktiv, off = deaktiviert");
                     else
                         result.AppendLine(line);
                 }
                 _block.CustomData = result.ToString().TrimEnd();
+                _logger?.Trace(MODULE, "Status in Custom Data gespeichert: " + (active ? "on" : "off"));
             }
             catch { }
         }
@@ -317,16 +267,10 @@ namespace SpaceArtefact
 
         public override void UpdateBeforeSimulation()
         {
-            // Init-Check: erst nach erstem Frame ist CustomData verfügbar
             if (!_fullyInitialized)
             {
                 _fullyInitialized = true;
 
-                if (!_msgHandlerRegistered)
-                {
-                    MyAPIGateway.Utilities.MessageEntered += OnMessageEntered;
-                    _msgHandlerRegistered = true;
-                }
                 if (!_dmgHandlerRegistered)
                 {
                     MyAPIGateway.Session.DamageSystem.RegisterBeforeDamageHandler(0, BeforeDamageHandler);
@@ -341,22 +285,24 @@ namespace SpaceArtefact
                 }
                 catch { }
 
-                // Custom Data leer? → Default schreiben (wie SpaceEconomy ProcessBlock)
                 if (string.IsNullOrWhiteSpace(_block.CustomData))
                     _block.CustomData = DEFAULT_CONFIG;
 
-                // Config laden
                 LoadConfig();
 
-                // Wenn aktiv → sofort grün setzen
                 if (_active)
                 {
                     SetAllEmissive(COLOR_GREEN, _glowIntensity);
-                    SetRotationTarget();
+                    SetRotationTarget("Init — aktiv");
+                    _logger?.Debug(MODULE, "Start: IDLE — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING + " Global=" + ROT_IDLE_GLOB);
+                }
+                else
+                {
+                    _logger?.Debug(MODULE, "Start: INAKTIV — Glow: SCHWARZ");
                 }
 
-                // Random-Timer initialisieren
                 _randomTimer = _triggerInterval;
+                _logger?.Trace(MODULE, "Random-Timer init: " + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h)");
                 return;
             }
 
@@ -372,46 +318,47 @@ namespace SpaceArtefact
 
             _frameTick++;
 
-            // Timer
-            if (_weatherTimer > 0) _weatherTimer--;
-            if (_cooldown     > 0) _cooldown--;
+            if (_weatherTimer > 0)
+            {
+                _weatherTimer--;
+                if (_weatherTimer % 600 == 0 && _weatherTimer > 0)
+                    _logger?.Trace(MODULE, "Wetter laeuft noch: " + (_weatherTimer / 60) + "s — Cooldown: " + (_cooldown / 60) + "s");
+            }
+            if (_cooldown > 0) _cooldown--;
 
-            // Rotation smooth
             _rotSpeed    = MathHelper.Lerp(_rotSpeed,    _rotSpeedTarget,    0.08f);
             _globalSpeed = MathHelper.Lerp(_globalSpeed, _globalSpeedTarget, 0.08f);
 
-            // Glow-Puls
             float glowTarget = WeatherActive ? GLOW_PULSE_STORM : GLOW_PULSE_IDLE;
             _glowPulseSpeed  = MathHelper.Lerp(_glowPulseSpeed, glowTarget, 0.05f);
 
-            // EACH_FRAME: Rotation + Glow
+            // TRACE: Glow-Puls Geschwindigkeit geändert (nur wenn Wechsel)
+            if (Math.Abs(glowTarget - _lastGlowTarget) > 0.001f)
+            {
+                _logger?.Trace(MODULE, "Glow-Puls geaendert: " + _lastGlowTarget.ToString("F3") + " -> " + glowTarget.ToString("F3") + " (Grund: " + (WeatherActive ? "Wetter aktiv" : "IDLE") + ")");
+                _lastGlowTarget = glowTarget;
+            }
+
             UpdateRotationAndGlow();
-
-            // EACH_FRAME: Impulse-Animation
             UpdateImpulse();
-
-            // Random-Nachrichten Sequenz (läuft jeden Frame)
             UpdateRandomMessages();
 
-            // 30-TICK: Spieler-Check + Random-Timer + DOT
             if (_frameTick % CHECK_INTERVAL == 0)
             {
                 UpdatePlayerCheck();
                 UpdateRandomTimer();
-
-                // DOT alle 30 Ticks statt jeden Frame (30x weniger GetPlayers() Aufrufe)
-                if (WeatherActive)
-                    ApplyDot();
+                if (WeatherActive) ApplyDot();
             }
 
-            // Wetter endet → Nachbeben stoppen + Spieler-Flag zurücksetzen
             if (!WeatherActive && _impulsePhase == ImpulsePhase.Aftershock)
             {
+                _logger?.Debug(MODULE, "Wetter beendet — Nachbeben gestoppt — Zustand: IDLE");
                 StopImpulse();
-                _shockwaveFired = false; // Spieler in Zone lösen erneut aus
+                _shockwaveFired = false;
             }
         }
 
+        private float _lastGlowTarget = GLOW_PULSE_IDLE;
         private bool WeatherActive => _weatherTimer > 0;
 
         // ──────────────────────────────────────────────────────────
@@ -434,32 +381,33 @@ namespace SpaceArtefact
             _glowIntensity = MathHelper.Clamp(_glowIntensity, GLOW_MIN, GLOW_MAX);
         }
 
-        private void SetRotationTarget()
+        private void SetRotationTarget(string grund)
         {
+            float newRing, newGlob;
+
             if (_impulsePhase == ImpulsePhase.Charging)
-            {
-                _rotSpeedTarget    = ROT_CHARGE_RING;
-                _globalSpeedTarget = ROT_CHARGE_GLOB;
-            }
+            { newRing = ROT_CHARGE_RING; newGlob = ROT_CHARGE_GLOB; }
             else if (WeatherActive && _playerInRange)
-            {
-                _rotSpeedTarget    = ROT_MAX_RING;
-                _globalSpeedTarget = ROT_MAX_GLOB;
-            }
+            { newRing = ROT_MAX_RING; newGlob = ROT_MAX_GLOB; }
             else if (WeatherActive)
-            {
-                _rotSpeedTarget    = ROT_STORM_RING;
-                _globalSpeedTarget = ROT_STORM_GLOB;
-            }
+            { newRing = ROT_STORM_RING; newGlob = ROT_STORM_GLOB; }
             else
+            { newRing = ROT_IDLE_RING; newGlob = ROT_IDLE_GLOB; }
+
+            // TRACE: nur bei Änderung
+            if (Math.Abs(newRing - _lastRotTarget) > 0.01f || grund != _lastRotGrund)
             {
-                _rotSpeedTarget    = ROT_IDLE_RING;
-                _globalSpeedTarget = ROT_IDLE_GLOB;
+                _logger?.Trace(MODULE, "Rotation -> Ring=" + newRing + " Global=" + newGlob + " — Grund: " + grund);
+                _lastRotTarget = newRing;
+                _lastRotGrund  = grund;
             }
+
+            _rotSpeedTarget    = newRing;
+            _globalSpeedTarget = newGlob;
         }
 
         // ──────────────────────────────────────────────────────────
-        //  DOT (20 HP/Sek innerhalb 5m, nur zu Fuß)
+        //  DOT
         // ──────────────────────────────────────────────────────────
 
         private void ApplyDot()
@@ -473,13 +421,13 @@ namespace SpaceArtefact
                 foreach (var p in players)
                 {
                     if (p?.Character == null || p.Character.IsDead) continue;
-                    if (p.Character.Parent != null) continue; // im Cockpit = sicher
+                    if (p.Character.Parent != null) continue;
 
                     float dist = (float)Vector3D.Distance(pos, p.Character.GetPosition());
                     if (dist > _rangeDot) continue;
 
-                    p.Character.DoDamage(_dotDamagePerTick,
-                        MyStringHash.GetOrCompute("Energy"), true);
+                    p.Character.DoDamage(_dotDamagePerTick, MyStringHash.GetOrCompute("Energy"), true);
+                    _logger?.Debug(MODULE, "DOT: " + p.DisplayName + " — " + dist.ToString("F1") + "m — " + (_dotDamagePerTick * 2f) + " HP/s");
                 }
             }
             catch { }
@@ -494,26 +442,41 @@ namespace SpaceArtefact
             float closest = GetClosestPlayerDistance();
             bool  inRange = closest <= _rangeTrigger;
 
+            _logger?.Trace(MODULE, "Spieler-Check: " +
+                (closest == float.MaxValue ? "kein Spieler" : closest.ToString("F1") + "m") +
+                " | inRange=" + inRange +
+                " | ShockwaveFired=" + _shockwaveFired +
+                " | Cooldown=" + (_cooldown / 60) + "s" +
+                " | Wetter=" + WeatherActive +
+                " | Phase=" + _impulsePhase);
+
             if (!inRange && _playerInRange)
+            {
                 _shockwaveFired = false;
+                _logger?.Trace(MODULE, "Spieler hat Reichweite verlassen — ShockwaveFired=false");
+            }
 
             _playerInRange = inRange;
 
-            // Spieler-Trigger: einmalig wenn reinkommt, kein Cooldown, kein Wetter aktiv
             if (_playerInRange && !_shockwaveFired && _cooldown == 0 && !WeatherActive
                 && _impulsePhase == ImpulsePhase.Idle)
             {
                 _shockwaveFired  = true;
                 _isRandomTrigger = false;
+                _logger?.Debug(MODULE, "SPIELER-TRIGGER — Distanz: " + closest.ToString("F1") + "m — Aufladung startet");
                 ShowAlienMessage(false);
                 StartChargeImpulse();
             }
+            else if (_playerInRange && _cooldown > 0)
+            {
+                _logger?.Trace(MODULE, "Spieler in Reichweite — Cooldown aktiv: " + (_cooldown / 60) + "s verbleibend — kein Trigger");
+            }
 
-            SetRotationTarget();
+            SetRotationTarget("Spieler-Check");
         }
 
         // ──────────────────────────────────────────────────────────
-        //  RANDOM-TRIGGER (alle 30-60 Min)
+        //  RANDOM-TRIGGER
         // ──────────────────────────────────────────────────────────
 
         private void UpdateRandomTimer()
@@ -521,23 +484,35 @@ namespace SpaceArtefact
             if (WeatherActive || _impulsePhase != ImpulsePhase.Idle || _randomMsgActive) return;
 
             _randomTimer -= CHECK_INTERVAL;
+
+            if (_frameTick % 600 == 0)
+                _logger?.Trace(MODULE, "Random-Timer: " + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h " + (_randomTimer / 60 % 60) + "m verbleibend)");
+
             if (_randomTimer > 0) return;
 
-            // Timer abgelaufen → neu starten für nächste Runde
             _randomTimer = _triggerInterval;
 
-            // Würfeln: _triggerChance% Wahrscheinlichkeit
-            if (_rng.Next(0, 100) >= _triggerChance) return;
+            int  roll      = _rng.Next(0, 100);
+            bool triggered = roll < _triggerChance;
 
-            // Spieler-Check: nur triggern wenn mindestens ein Spieler online ist
+            _logger?.Debug(MODULE, "Random-Wuerfel: " + roll + " (Chance=" + _triggerChance + "%) — " +
+                (triggered ? "GETRIGGERT" : "nicht getriggert") +
+                " — Timer neu: " + _triggerInterval + " Ticks (" + (_triggerInterval / 60 / 60) + "h)");
+
+            if (!triggered) return;
+
             var players = new List<IMyPlayer>();
             MyAPIGateway.Players.GetPlayers(players, p => !p.IsBot);
-            if (players.Count == 0) return;
 
-            // Trigger auslösen — Aufladung startet erst nach allen Nachrichten
+            if (players.Count == 0)
+            {
+                _logger?.Trace(MODULE, "Random-Trigger abgebrochen — keine Spieler online");
+                return;
+            }
+
+            _logger?.Debug(MODULE, "RANDOM-TRIGGER — " + players.Count + " Spieler online — Nachrichtensequenz startet");
             _isRandomTrigger = true;
             ShowAlienMessage(true);
-            // StartChargeImpulse() wird von UpdateRandomMessages() aufgerufen
         }
 
         // ──────────────────────────────────────────────────────────
@@ -573,25 +548,22 @@ namespace SpaceArtefact
             {
                 if (!isRandom)
                 {
-                    // Spieler-Trigger: sofort eine Nachricht, dann Aufladung
                     MyAPIGateway.Utilities.ShowNotification(MSG_PLAYER, 6000, MyFontEnum.Red);
+                    _logger?.Trace(MODULE, "Alien-Nachricht gesendet (Spieler-Trigger)");
                 }
                 else
                 {
-                    // Random-Trigger: gestaffelte Nachrichten starten
                     _randomMsgIndex  = 0;
                     _randomMsgTimer  = 0;
                     _randomMsgActive = true;
-                    // Erste Nachricht sofort senden
-                    MyAPIGateway.Utilities.ShowNotification(
-                        MSG_RANDOM_SEQUENCE[0], 2500, MyFontEnum.Red);
+                    MyAPIGateway.Utilities.ShowNotification(MSG_RANDOM_SEQUENCE[0], 2500, MyFontEnum.Red);
                     _randomMsgIndex = 1;
+                    _logger?.Trace(MODULE, "Alien-Nachrichtensequenz gestartet (" + MSG_RANDOM_SEQUENCE.Length + " Nachrichten)");
                 }
             }
             catch { }
         }
 
-        // Wird in UpdateBeforeSimulation aufgerufen
         private void UpdateRandomMessages()
         {
             if (!_randomMsgActive) return;
@@ -604,22 +576,22 @@ namespace SpaceArtefact
             {
                 try
                 {
-                    MyAPIGateway.Utilities.ShowNotification(
-                        MSG_RANDOM_SEQUENCE[_randomMsgIndex], 2500, MyFontEnum.Red);
+                    MyAPIGateway.Utilities.ShowNotification(MSG_RANDOM_SEQUENCE[_randomMsgIndex], 2500, MyFontEnum.Red);
+                    _logger?.Trace(MODULE, "Alien-Nachricht " + _randomMsgIndex + "/" + MSG_RANDOM_SEQUENCE.Length + " gesendet");
                 }
                 catch { }
                 _randomMsgIndex++;
             }
             else
             {
-                // Alle Nachrichten gesendet → Aufladung starten
                 _randomMsgActive = false;
+                _logger?.Trace(MODULE, "Alien-Nachrichten abgeschlossen — Aufladung startet");
                 StartChargeImpulse();
             }
         }
 
         // ──────────────────────────────────────────────────────────
-        //  SCHOCKWELLE (am Ende der Auflade-Sequenz)
+        //  SCHOCKWELLE
         // ──────────────────────────────────────────────────────────
 
         private void FireShockwave()
@@ -628,31 +600,30 @@ namespace SpaceArtefact
             {
                 _hitCount++;
                 Vector3D origin = _block.PositionComp.WorldAABB.Center;
+                float drainBase = Math.Min(_batteryDrainBase + (_hitCount - 1) * _batteryDrainStep, 0.95f);
 
-                // Batterie-Drain auf alle Grids in Reichweite
-                DrainNearbyBatteries(origin);
+                _logger?.Debug(MODULE, "SCHOCKWELLE — Impuls #" + _hitCount +
+                    " — Drain: " + (drainBase * 100f).ToString("F1") + "%" +
+                    " — Wetter: " + _weatherDuration + "s");
 
-                // ArtefactStorm Wetter triggern
+                DrainNearbyBatteries(origin, drainBase);
+
                 try
                 {
                     MyAPIGateway.Session.WeatherEffects.SetWeather(
-                        WEATHER_ARTEFACT,
-                        0f,
+                        WEATHER_ARTEFACT, 0f,
                         _block.PositionComp.WorldAABB.Center,
-                        false,
-                        Vector3D.Zero,
-                        _weatherDuration,
-                        1f);
+                        false, Vector3D.Zero, _weatherDuration, 1f);
+                    _logger?.Debug(MODULE, "WETTER aktiviert: ArtefactStorm fuer " + _weatherDuration + "s");
                 }
                 catch { }
 
-                // Wetter-Timer setzen (intern für Aftershock/DOT)
                 _weatherTimer = _weatherDuration * 60;
                 _cooldown     = COOLDOWN_TICKS;
 
-                // Explosion-Sound
-                MyVisualScriptLogicProvider.PlaySingleSoundAtPosition(
-                    "WepSmallWarheadExpl", origin);
+                _logger?.Trace(MODULE, "WeatherTimer=" + _weatherTimer + " Ticks — Cooldown=" + _cooldown + " Ticks");
+
+                MyVisualScriptLogicProvider.PlaySingleSoundAtPosition("WepSmallWarheadExpl", origin);
             }
             catch { }
         }
@@ -661,64 +632,73 @@ namespace SpaceArtefact
         //  BATTERIE-DRAIN
         // ──────────────────────────────────────────────────────────
 
-        private void DrainNearbyBatteries(Vector3D origin)
+        private void DrainNearbyBatteries(Vector3D origin, float drainBase)
         {
             try
             {
-                // Drain steigt mit jedem Impuls: 45%, 50%, 55%... (+5% pro Impuls)
-                float drainBase = Math.Min(
-                    _batteryDrainBase + (_hitCount - 1) * _batteryDrainStep,
-                    0.95f);
-
                 var entities = new HashSet<IMyEntity>();
                 MyAPIGateway.Entities.GetEntities(entities);
+
+                int gridCount    = 0;
+                int batteryCount = 0;
 
                 foreach (var entity in entities)
                 {
                     var grid = entity as IMyCubeGrid;
                     if (grid == null || grid.Closed) continue;
 
-                    float gridDist = (float)Vector3D.Distance(
-                        origin, grid.PositionComp.WorldAABB.Center);
+                    float gridDist = (float)Vector3D.Distance(origin, grid.PositionComp.WorldAABB.Center);
                     if (gridDist > _batteryDrainRange) continue;
 
-                    // Distanz-Abfall: -0.5% pro 10m Entfernung
                     float distancePenalty = (gridDist / 10f) * 0.005f;
-                    float drainPct = Math.Max(0.01f, drainBase - distancePenalty);
-                    drainPct = Math.Min(drainPct, 0.95f);
+                    float drainPct = Math.Max(0.01f, Math.Min(drainBase - distancePenalty, 0.95f));
 
                     var gts = MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(grid);
                     if (gts == null) continue;
 
                     var batteries = new List<Sandbox.ModAPI.IMyBatteryBlock>();
                     gts.GetBlocksOfType(batteries, b => b.IsFunctional && b.Enabled);
+                    if (batteries.Count == 0) continue;
+
+                    gridCount++;
+
+                    _logger?.Trace(MODULE, "Drain: " + grid.DisplayName +
+                        " (" + gridDist.ToString("F0") + "m)" +
+                        " — " + (drainPct * 100f).ToString("F1") + "%" +
+                        " — " + batteries.Count + " Batterien");
 
                     foreach (var bat in batteries)
                     {
                         var internalBat = bat as MyBatteryBlock;
                         if (internalBat == null) continue;
 
-                        float drain = bat.MaxStoredPower * drainPct;
+                        float drain    = bat.MaxStoredPower * drainPct;
                         float newPower = Math.Max(0f, bat.CurrentStoredPower - drain);
 
                         internalBat.SourceComp.SetRemainingCapacityByType(
                             MyResourceDistributorComponent.ElectricityId, newPower);
+
+                        batteryCount++;
                     }
                 }
+
+                _logger?.Debug(MODULE, "Drain abgeschlossen — " + gridCount + " Grids — " + batteryCount + " Batterien — Drain: " + (drainBase * 100f).ToString("F1") + "%");
             }
             catch { }
         }
 
-        // Aftershock-Impuls: Batterie-Drain aber kein neues Wetter
         private void FireAftershockImpulse()
         {
             try
             {
                 _hitCount++;
-                Vector3D origin = _block.PositionComp.WorldAABB.Center;
-                DrainNearbyBatteries(origin);
-                MyVisualScriptLogicProvider.PlaySingleSoundAtPosition(
-                    "WepSmallWarheadExpl", origin);
+                Vector3D origin  = _block.PositionComp.WorldAABB.Center;
+                float drainBase  = Math.Min(_batteryDrainBase + (_hitCount - 1) * _batteryDrainStep, 0.95f);
+
+                _logger?.Debug(MODULE, "NACHBEBEN — Impuls #" + _hitCount + " — Drain: " + (drainBase * 100f).ToString("F1") + "%");
+
+                DrainNearbyBatteries(origin, drainBase);
+                MyVisualScriptLogicProvider.PlaySingleSoundAtPosition("WepSmallWarheadExpl", origin);
             }
             catch { }
         }
@@ -737,8 +717,7 @@ namespace SpaceArtefact
                 {
                     var dd = _delayedDamages[i];
                     if (dd.Target != null && !dd.Target.IsDead)
-                        dd.Target.DoDamage(dd.Damage,
-                            MyStringHash.GetOrCompute("Energy"), true);
+                        dd.Target.DoDamage(dd.Damage, MyStringHash.GetOrCompute("Energy"), true);
                 }
                 catch { }
                 _delayedDamages.RemoveAt(i);
@@ -747,10 +726,9 @@ namespace SpaceArtefact
 
         // ──────────────────────────────────────────────────────────
         //  IMPULSE-SEQUENZ
-        //  Center(0)→Inner(1)→Middle(2)→Outer(3)→Explosion(4)
-        //  Charging:   Basis=GRÜN,   Welle=ROT → danach Aftershock
-        //  Aftershock: Basis=ORANGE, Welle=ROT → wiederholt bis Wetter endet
         // ──────────────────────────────────────────────────────────
+
+        private static readonly string[] STEP_NAMES = { "Center", "Inner", "Middle", "Outer", "Explosion" };
 
         private void StartChargeImpulse()
         {
@@ -761,7 +739,11 @@ namespace SpaceArtefact
             _pauseDuration = 0;
             _impulseTimer  = _stepDuration;
             PlayChargeSound();
-            SetRotationTarget();
+            SetRotationTarget("Aufladung");
+
+            _logger?.Debug(MODULE, "AUFLADUNG gestartet — Zustand: AUFLADEN" +
+                " — Rotation: Ring=" + ROT_CHARGE_RING + " Global=" + ROT_CHARGE_GLOB +
+                " — Glow: ROT wandert Center->Inner->Middle->Outer");
         }
 
         private void StartAftershock()
@@ -774,7 +756,11 @@ namespace SpaceArtefact
             _impulseTimer  = _stepDuration;
             SetAllEmissive(COLOR_GREEN, _glowIntensity);
             PlayChargeSound();
-            SetRotationTarget();
+            SetRotationTarget("Nachbeben");
+
+            _logger?.Debug(MODULE, "NACHBEBEN gestartet — Zustand: WETTER" +
+                " — Rotation: Ring=" + ROT_STORM_RING + " Global=" + ROT_STORM_GLOB +
+                " — Pause zwischen Impulsen: " + (AFTERSHOCK_PAUSE_TICKS / 60f).ToString("F1") + "s");
         }
 
         private void StopImpulse()
@@ -782,14 +768,16 @@ namespace SpaceArtefact
             _impulsePhase = ImpulsePhase.Idle;
             StopChargeSound();
             SetAllEmissive(COLOR_GREEN, _glowIntensity);
-            SetRotationTarget();
+            SetRotationTarget("Impuls gestoppt");
+
+            _logger?.Debug(MODULE, "IMPULS gestoppt — Zustand: IDLE" +
+                " — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING + " Global=" + ROT_IDLE_GLOB);
         }
 
         private void UpdateImpulse()
         {
             if (_impulsePhase == ImpulsePhase.Idle) return;
 
-            // Basis immer grün — kein Orange mehr
             Color baseColor = COLOR_GREEN;
 
             if (_impulsePause)
@@ -802,6 +790,7 @@ namespace SpaceArtefact
                     _impulseStep  = 0;
                     _impulseTimer = _stepDuration;
                     PlayChargeSound();
+                    _logger?.Trace(MODULE, "Nachbeben-Pause beendet — neuer Impuls startet bei Step 0 (Center)");
                 }
                 return;
             }
@@ -821,8 +810,6 @@ namespace SpaceArtefact
                     if (_impulseTimer == _stepDuration)
                     {
                         StopChargeSound();
-                        // Batterie-Drain bei JEDEM Impuls
-                        // ArtefactStorm nur beim ersten (Charging-Phase)
                         if (_impulsePhase == ImpulsePhase.Charging)
                             FireShockwave();
                         else
@@ -831,18 +818,24 @@ namespace SpaceArtefact
                     break;
             }
 
-            SetEmissive("WhiteDwarf",          centerColor, _glowIntensity);
+            SetEmissive("WhiteDwarf",                centerColor, _glowIntensity);
             SetEmissiveSubpart("InnerRing",          innerColor,  _glowIntensity);
-            SetEmissiveSubpart("MiddleRing",          middleColor, _glowIntensity);
-            SetEmissiveSubpart("OuterRing_section_1", outerColor,  _glowIntensity);
+            SetEmissiveSubpart("MiddleRing",         middleColor, _glowIntensity);
+            SetEmissiveSubpart("OuterRing_section_1",outerColor,  _glowIntensity);
 
             _impulseTimer--;
             if (_impulseTimer > 0) return;
 
+            string currentStep = _impulseStep < STEP_NAMES.Length ? STEP_NAMES[_impulseStep] : "?";
+            _logger?.Trace(MODULE, "Impuls Step " + _impulseStep + " (" + currentStep + ") abgeschlossen");
+
             _impulseStep++;
+
             if (_impulseStep < 5)
             {
                 _impulseTimer = _stepDuration;
+                string nextStep = _impulseStep < STEP_NAMES.Length ? STEP_NAMES[_impulseStep] : "?";
+                _logger?.Trace(MODULE, "Impuls Step " + _impulseStep + " (" + nextStep + ") startet — Glow ROT an " + nextStep);
                 return;
             }
 
@@ -854,6 +847,7 @@ namespace SpaceArtefact
             {
                 _impulsePause = true;
                 _impulseTimer = _pauseDuration;
+                _logger?.Trace(MODULE, "Nachbeben-Pause: " + (AFTERSHOCK_PAUSE_TICKS / 60f).ToString("F1") + "s — Wetter noch: " + (_weatherTimer / 60) + "s");
             }
             else
             {
@@ -870,9 +864,9 @@ namespace SpaceArtefact
             try
             {
                 if (_chargeSoundActive) return;
-                _chargeEmitter.PlaySingleSound(
-                    new MySoundPair("ShipJumpDriveCharging"), stopPrevious: true);
+                _chargeEmitter.PlaySingleSound(new MySoundPair("ShipJumpDriveCharging"), stopPrevious: true);
                 _chargeSoundActive = true;
+                _logger?.Trace(MODULE, "LadeSound gestartet");
             }
             catch { }
         }
@@ -884,6 +878,7 @@ namespace SpaceArtefact
                 if (!_chargeSoundActive) return;
                 _chargeEmitter.StopSound(forced: true);
                 _chargeSoundActive = false;
+                _logger?.Trace(MODULE, "LadeSound gestoppt");
             }
             catch { }
         }
@@ -938,8 +933,7 @@ namespace SpaceArtefact
                 }
 
                 float rad = MathHelper.ToRadians(speed);
-                info.LocalMatrix = Matrix.Normalize(
-                    Matrix.CreateFromAxisAngle(axis, rad) * info.LocalMatrix);
+                info.LocalMatrix = Matrix.Normalize(Matrix.CreateFromAxisAngle(axis, rad) * info.LocalMatrix);
                 sub.PositionComp.LocalMatrix = info.LocalMatrix * _globalMatrix;
                 _subparts[name] = info;
             }
@@ -947,81 +941,32 @@ namespace SpaceArtefact
         }
 
         // ──────────────────────────────────────────────────────────
-        //  DAMAGE HANDLER (Artefakt unzerstörbar wenn aktiv)
+        //  DAMAGE HANDLER
         // ──────────────────────────────────────────────────────────
 
         private void BeforeDamageHandler(object target, ref MyDamageInformation info)
         {
             if (_active && target == Entity)
+            {
                 info.Amount = 0f;
+                _logger?.Trace(MODULE, "Schaden blockiert — Artefakt unzerstoerbar waehrend aktiv");
+            }
         }
 
         // ──────────────────────────────────────────────────────────
-        //  CHAT-BEFEHLE (Admin-only)
+        //  PUBLIC COMMAND API
         // ──────────────────────────────────────────────────────────
 
-        private void OnMessageEntered(string msg, ref bool sendToOthers)
+        public void ExecuteCommand(string cmd, int targetId, bool hasId, bool allTarget)
         {
-            if (string.IsNullOrWhiteSpace(msg)) return;
-            string m = msg.Trim().ToLowerInvariant();
-            if (!m.StartsWith("!spaceartefact")) return;
-
-            sendToOthers = false;
-
-            if (!IsAdmin())
-            {
-                MyAPIGateway.Utilities.ShowNotification(
-                    "[Artefakt] Nur Admins.", 3000, MyFontEnum.Red);
-                return;
-            }
-
-            // Command nach Prefix extrahieren und parsen
-            string remainder = m.Substring("!spaceartefact".Length).Trim();
-            string[] parts = remainder.Split(new char[]{' '}, System.StringSplitOptions.RemoveEmptyEntries);
-
-            // ID und Command ermitteln
-            // Format: !spaceartefact [id|all] <cmd>
-            int targetId = 0;       // Default ID=0
-            string cmd = "";
-            bool hasId = false;
-            bool allTargeted = false;
-
-            if (parts.Length == 1)
-            {
-                // !spaceartefact on  → ID=0, cmd=on
-                cmd = parts[0];
-            }
-            else if (parts.Length == 2)
-            {
-                if (parts[0] == "all")
-                {
-                    // !spaceartefact all reset  → alle Artefakte
-                    allTargeted = true;
-                    cmd = parts[1];
-                }
-                else
-                {
-                    int parsedId;
-                    if (int.TryParse(parts[0], out parsedId))
-                    {
-                        // !spaceartefact 1 on  → ID=1, cmd=on
-                        targetId = parsedId;
-                        cmd      = parts[1];
-                        hasId    = true;
-                    }
-                    else
-                    {
-                        cmd = parts[0];
-                    }
-                }
-            }
-
-            // Prüfen ob dieses Artefakt angesprochen wird
-            if (!allTargeted)
+            if (!allTarget)
             {
                 if (hasId && _artefactId != targetId) return;
                 if (!hasId && _artefactId != 0) return;
             }
+
+            string ziel = allTarget ? "all" : (hasId ? "ID=" + targetId : "ID=0");
+            _logger?.Debug(MODULE, "Command: '" + cmd + "' — Ziel: " + ziel);
 
             switch (cmd)
             {
@@ -1029,9 +974,8 @@ namespace SpaceArtefact
                     _active = true;
                     SaveStatus(true);
                     SetAllEmissive(COLOR_GREEN, _glowIntensity);
-                    SetRotationTarget();
-                    MyAPIGateway.Utilities.ShowNotification(
-                        $"[Artefakt {_artefactId}] Aktiviert", 2000, MyFontEnum.Green);
+                    SetRotationTarget("Command: on");
+                    _logger?.Debug(MODULE, "AKTIVIERT — Zustand: IDLE — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING);
                     break;
 
                 case "off":
@@ -1040,11 +984,11 @@ namespace SpaceArtefact
                     StopImpulse();
                     _delayedDamages.Clear();
                     SetAllEmissive(Color.Black, 0f);
-                    MyAPIGateway.Utilities.ShowNotification(
-                        $"[Artefakt {_artefactId}] Deaktiviert", 2000, MyFontEnum.Red);
+                    _logger?.Debug(MODULE, "DEAKTIVIERT — Zustand: INAKTIV — Glow: SCHWARZ — alle Impulse gestoppt");
                     break;
 
                 case "reset":
+                    LoadConfig();
                     _shockwaveFired    = false;
                     _weatherTimer      = 0;
                     _cooldown          = 0;
@@ -1058,55 +1002,34 @@ namespace SpaceArtefact
                     _randomMsgTimer    = 0;
                     StopImpulse();
                     _delayedDamages.Clear();
-                    LoadConfig();
-                    try
-                    {
-                        MyAPIGateway.Session.WeatherEffects.RemoveWeather(
-                            _block.PositionComp.WorldAABB.Center);
-                    }
-                    catch { }
-                    MyAPIGateway.Utilities.ShowNotification(
-                        $"[Artefakt {_artefactId}] Reset", 2000, MyFontEnum.Blue);
+                    try { MyAPIGateway.Session.WeatherEffects.RemoveWeather(_block.PositionComp.WorldAABB.Center); } catch { }
+                    _logger?.Debug(MODULE, "RESET — Config neu geladen" +
+                        " — WeatherTimer=0 — Cooldown=0 — HitCount=0" +
+                        " — RandomTimer=" + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h)" +
+                        " — Wetter entfernt");
                     break;
 
                 case "trigger":
                     if (!_active)
                     {
-                        MyAPIGateway.Utilities.ShowNotification(
-                            $"[Artefakt {_artefactId}] Erst aktivieren.", 2000, MyFontEnum.Red);
+                        _logger?.Debug(MODULE, "Command 'trigger' abgelehnt — Artefakt inaktiv");
                         break;
                     }
                     if (_impulsePhase != ImpulsePhase.Idle)
                     {
-                        MyAPIGateway.Utilities.ShowNotification(
-                            $"[Artefakt {_artefactId}] Läuft bereits.", 2000, MyFontEnum.Red);
+                        _logger?.Debug(MODULE, "Command 'trigger' abgelehnt — Phase=" + _impulsePhase + " bereits aktiv");
                         break;
                     }
                     _isRandomTrigger = false;
+                    _logger?.Debug(MODULE, "MANUELL-TRIGGER — Aufladung startet sofort");
                     ShowAlienMessage(false);
                     StartChargeImpulse();
-                    MyAPIGateway.Utilities.ShowNotification(
-                        $"[Artefakt {_artefactId}] Manuell getriggert", 2000, MyFontEnum.Green);
                     break;
 
                 default:
-                    MyAPIGateway.Utilities.ShowNotification(
-                        "[Artefakt] Befehle: on | off | reset | trigger | all reset", 3000, MyFontEnum.White);
+                    _logger?.Warn(MODULE, "Unbekannter Command: '" + cmd + "'");
                     break;
             }
-        }
-
-        private bool IsAdmin()
-        {
-            var p = MyAPIGateway.Session?.Player;
-            if (p == null) return false;
-
-            // Singleplayer: immer erlaubt
-            if (MyAPIGateway.Session.OnlineMode == MyOnlineModeEnum.OFFLINE)
-                return true;
-
-            // Multiplayer / Dedicated Server: Admin-Check
-            return p.PromoteLevel >= MyPromoteLevel.Admin;
         }
 
         // ──────────────────────────────────────────────────────────
@@ -1115,11 +1038,7 @@ namespace SpaceArtefact
 
         public override void Close()
         {
-            if (_msgHandlerRegistered)
-            {
-                MyAPIGateway.Utilities.MessageEntered -= OnMessageEntered;
-                _msgHandlerRegistered = false;
-            }
+            _logger?.Debug(MODULE, "Controller geschlossen — ID=" + _artefactId);
             try { _chargeEmitter?.StopSound(true); _chargeEmitter?.Cleanup(); } catch { }
             base.Close();
         }
