@@ -23,6 +23,13 @@ namespace PhantombiteArtefact.Modules
         private const string MODULE = "Artefact_Controller";
 
         // ──────────────────────────────────────────────────────────
+        //  STATE-SYNC (Server → Client)
+        //  Format: "entityId|cmd"
+        //  cmd: "on" / "off" / "reset" / "storm_start" / "storm_end"
+        // ──────────────────────────────────────────────────────────
+        private const ushort STATE_SYNC_PACKET = 5999;
+
+        // ──────────────────────────────────────────────────────────
         //  KONFIGURATION
         // ──────────────────────────────────────────────────────────
 
@@ -178,6 +185,11 @@ namespace PhantombiteArtefact.Modules
         {
             _block = Entity as IMyFunctionalBlock;
             if (_block == null) return;
+
+            // State-Sync Paket registrieren (Client empfängt vom Server)
+            if (!MyAPIGateway.Multiplayer.IsServer)
+                MyAPIGateway.Multiplayer.RegisterMessageHandler(STATE_SYNC_PACKET, OnStateSyncReceived);
+
             NeedsUpdate = MyEntityUpdateEnum.EACH_FRAME;
         }
 
@@ -313,6 +325,9 @@ namespace PhantombiteArtefact.Modules
             if (!_active)
             {
                 SetAllEmissive(Color.Black, 0f);
+                // Sicherstellen dass Rotation wirklich 0 ist
+                _rotSpeed    = 0f;
+                _globalSpeed = 0f;
                 return;
             }
 
@@ -461,11 +476,14 @@ namespace PhantombiteArtefact.Modules
             if (_playerInRange && !_shockwaveFired && _cooldown == 0 && !WeatherActive
                 && _impulsePhase == ImpulsePhase.Idle)
             {
-                _shockwaveFired  = true;
-                _isRandomTrigger = false;
-                _logger?.Debug(MODULE, "SPIELER-TRIGGER — Distanz: " + closest.ToString("F1") + "m — Aufladung startet");
-                ShowAlienMessage(false);
-                StartChargeImpulse();
+                if (MyAPIGateway.Multiplayer.IsServer)
+                {
+                    _shockwaveFired  = true;
+                    _isRandomTrigger = false;
+                    _logger?.Debug(MODULE, "SPIELER-TRIGGER — Distanz: " + closest.ToString("F1") + "m — Aufladung startet");
+                    ShowAlienMessage(false);
+                    StartChargeImpulse();
+                }
             }
             else if (_playerInRange && _cooldown > 0)
             {
@@ -500,6 +518,8 @@ namespace PhantombiteArtefact.Modules
                 " — Timer neu: " + _triggerInterval + " Ticks (" + (_triggerInterval / 60 / 60) + "h)");
 
             if (!triggered) return;
+
+            if (!MyAPIGateway.Multiplayer.IsServer) return;
 
             var players = new List<IMyPlayer>();
             MyAPIGateway.Players.GetPlayers(players, p => !p.IsBot);
@@ -623,7 +643,7 @@ namespace PhantombiteArtefact.Modules
 
                 _logger?.Trace(MODULE, "WeatherTimer=" + _weatherTimer + " Ticks — Cooldown=" + _cooldown + " Ticks");
 
-                MyVisualScriptLogicProvider.PlaySingleSoundAtPosition("WepSmallWarheadExpl", origin);
+                BroadcastState("storm_start");
             }
             catch { }
         }
@@ -646,6 +666,9 @@ namespace PhantombiteArtefact.Modules
                 {
                     var grid = entity as IMyCubeGrid;
                     if (grid == null || grid.Closed) continue;
+
+                    // Eigenes Grid nicht drainieren
+                    if (grid.EntityId == _block.CubeGrid.EntityId) continue;
 
                     float gridDist = (float)Vector3D.Distance(origin, grid.PositionComp.WorldAABB.Center);
                     if (gridDist > _batteryDrainRange) continue;
@@ -698,7 +721,7 @@ namespace PhantombiteArtefact.Modules
                 _logger?.Debug(MODULE, "NACHBEBEN — Impuls #" + _hitCount + " — Drain: " + (drainBase * 100f).ToString("F1") + "%");
 
                 DrainNearbyBatteries(origin, drainBase);
-                MyVisualScriptLogicProvider.PlaySingleSoundAtPosition("WepSmallWarheadExpl", origin);
+                BroadcastState("impulse_fire");
             }
             catch { }
         }
@@ -740,6 +763,7 @@ namespace PhantombiteArtefact.Modules
             _impulseTimer  = _stepDuration;
             PlayChargeSound();
             SetRotationTarget("Aufladung");
+            BroadcastState("charge_start");
 
             _logger?.Debug(MODULE, "AUFLADUNG gestartet — Zustand: AUFLADEN" +
                 " — Rotation: Ring=" + ROT_CHARGE_RING + " Global=" + ROT_CHARGE_GLOB +
@@ -767,11 +791,18 @@ namespace PhantombiteArtefact.Modules
         {
             _impulsePhase = ImpulsePhase.Idle;
             StopChargeSound();
-            SetAllEmissive(COLOR_GREEN, _glowIntensity);
-            SetRotationTarget("Impuls gestoppt");
 
-            _logger?.Debug(MODULE, "IMPULS gestoppt — Zustand: IDLE" +
-                " — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING + " Global=" + ROT_IDLE_GLOB);
+            if (_active)
+            {
+                SetAllEmissive(COLOR_GREEN, _glowIntensity);
+                SetRotationTarget("Impuls gestoppt");
+                _logger?.Debug(MODULE, "IMPULS gestoppt — Zustand: IDLE" +
+                    " — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING + " Global=" + ROT_IDLE_GLOB);
+            }
+            else
+            {
+                _logger?.Debug(MODULE, "IMPULS gestoppt — Artefakt inaktiv — kein Glow/Rotation Reset");
+            }
         }
 
         private void UpdateImpulse()
@@ -971,20 +1002,44 @@ namespace PhantombiteArtefact.Modules
             switch (cmd)
             {
                 case "on":
-                    _active = true;
+                    _active            = true;
+                    _shockwaveFired    = false;
+                    _playerInRange     = false;
+                    _randomMsgActive   = false;
+                    _randomMsgIndex    = 0;
+                    _randomMsgTimer    = 0;
+                    _randomTimer       = _triggerInterval;
+                    _rotSpeed          = ROT_IDLE_RING;
+                    _globalSpeed       = ROT_IDLE_GLOB;
+                    _rotSpeedTarget    = ROT_IDLE_RING;
+                    _globalSpeedTarget = ROT_IDLE_GLOB;
                     SaveStatus(true);
                     SetAllEmissive(COLOR_GREEN, _glowIntensity);
                     SetRotationTarget("Command: on");
+                    BroadcastState("on");
                     _logger?.Debug(MODULE, "AKTIVIERT — Zustand: IDLE — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING);
                     break;
 
                 case "off":
-                    _active = false;
+                    _active            = false;
+                    _shockwaveFired    = false;
+                    _playerInRange     = false;
+                    _randomMsgActive   = false;
+                    _randomMsgIndex    = 0;
+                    _randomMsgTimer    = 0;
+                    _weatherTimer      = 0;
+                    _cooldown          = 0;
+                    _rotSpeed          = 0f;
+                    _globalSpeed       = 0f;
+                    _rotSpeedTarget    = 0f;
+                    _globalSpeedTarget = 0f;
                     SaveStatus(false);
                     StopImpulse();
                     _delayedDamages.Clear();
                     SetAllEmissive(Color.Black, 0f);
-                    _logger?.Debug(MODULE, "DEAKTIVIERT — Zustand: INAKTIV — Glow: SCHWARZ — alle Impulse gestoppt");
+                    try { MyAPIGateway.Session.WeatherEffects.RemoveWeather(_block.PositionComp.WorldAABB.Center); } catch { }
+                    BroadcastState("off");
+                    _logger?.Debug(MODULE, "DEAKTIVIERT — Zustand: INAKTIV — Glow: SCHWARZ — Rotation: 0 — Wetter entfernt");
                     break;
 
                 case "reset":
@@ -994,19 +1049,25 @@ namespace PhantombiteArtefact.Modules
                     _cooldown          = 0;
                     _hitCount          = 0;
                     _playerInRange     = false;
+                    _rotSpeed          = ROT_IDLE_RING;
+                    _globalSpeed       = ROT_IDLE_GLOB;
                     _rotSpeedTarget    = ROT_IDLE_RING;
                     _globalSpeedTarget = ROT_IDLE_GLOB;
                     _randomTimer       = _triggerInterval;
                     _randomMsgActive   = false;
                     _randomMsgIndex    = 0;
                     _randomMsgTimer    = 0;
+                    _active            = true;
                     StopImpulse();
                     _delayedDamages.Clear();
                     try { MyAPIGateway.Session.WeatherEffects.RemoveWeather(_block.PositionComp.WorldAABB.Center); } catch { }
-                    _logger?.Debug(MODULE, "RESET — Config neu geladen" +
-                        " — WeatherTimer=0 — Cooldown=0 — HitCount=0" +
-                        " — RandomTimer=" + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h)" +
-                        " — Wetter entfernt");
+                    SaveStatus(true);
+                    SetAllEmissive(COLOR_GREEN, _glowIntensity);
+                    SetRotationTarget("Command: reset");
+                    BroadcastState("reset");
+                    _logger?.Debug(MODULE, "RESET — Wetter entfernt — Impulse gestoppt — zurück zu IDLE" +
+                        " — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING +
+                        " — RandomTimer=" + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h)");
                     break;
 
                 case "trigger":
@@ -1033,6 +1094,108 @@ namespace PhantombiteArtefact.Modules
         }
 
         // ──────────────────────────────────────────────────────────
+        //  STATE-SYNC
+        // ──────────────────────────────────────────────────────────
+
+        private void BroadcastState(string cmd)
+        {
+            try
+            {
+                if (!MyAPIGateway.Multiplayer.IsServer) return;
+                string msg = Entity.EntityId + "|" + cmd;
+                byte[] data = System.Text.Encoding.UTF8.GetBytes(msg);
+                MyAPIGateway.Multiplayer.SendMessageToOthers(STATE_SYNC_PACKET, data);
+                _logger?.Trace(MODULE, "State-Sync gesendet: " + msg);
+            }
+            catch { }
+        }
+
+        private void OnStateSyncReceived(byte[] data)
+        {
+            try
+            {
+                string msg = System.Text.Encoding.UTF8.GetString(data);
+                string[] parts = msg.Split('|');
+                if (parts.Length < 2) return;
+
+                long entityId;
+                if (!long.TryParse(parts[0], out entityId)) return;
+                if (entityId != Entity.EntityId) return;
+
+                string cmd = parts[1];
+                ApplyStateClient(cmd);
+            }
+            catch { }
+        }
+
+        private void ApplyStateClient(string cmd)
+        {
+            switch (cmd)
+            {
+                case "on":
+                    _active            = true;
+                    _rotSpeed          = ROT_IDLE_RING;
+                    _globalSpeed       = ROT_IDLE_GLOB;
+                    _rotSpeedTarget    = ROT_IDLE_RING;
+                    _globalSpeedTarget = ROT_IDLE_GLOB;
+                    SetAllEmissive(COLOR_GREEN, _glowIntensity);
+                    SetRotationTarget("StateSync: on");
+                    break;
+
+                case "off":
+                    _active            = false;
+                    _rotSpeed          = 0f;
+                    _globalSpeed       = 0f;
+                    _rotSpeedTarget    = 0f;
+                    _globalSpeedTarget = 0f;
+                    SetAllEmissive(Color.Black, 0f);
+                    break;
+
+                case "reset":
+                    _active            = true;
+                    _weatherTimer      = 0;
+                    _rotSpeed          = ROT_IDLE_RING;
+                    _globalSpeed       = ROT_IDLE_GLOB;
+                    _rotSpeedTarget    = ROT_IDLE_RING;
+                    _globalSpeedTarget = ROT_IDLE_GLOB;
+                    StopImpulse();
+                    SetAllEmissive(COLOR_GREEN, _glowIntensity);
+                    SetRotationTarget("StateSync: reset");
+                    break;
+
+                case "charge_start":
+                    if (_impulsePhase == ImpulsePhase.Idle)
+                    {
+                        _impulsePhase  = ImpulsePhase.Charging;
+                        _impulseStep   = 0;
+                        _impulsePause  = false;
+                        _stepDuration  = CHARGE_STEP_TICKS;
+                        _pauseDuration = 0;
+                        _impulseTimer  = _stepDuration;
+                        PlayChargeSound();
+                        SetRotationTarget("StateSync: charge_start");
+                    }
+                    break;
+
+                case "storm_start":
+                    _weatherTimer = _weatherDuration * 60;
+                    SetRotationTarget("StateSync: storm_start");
+                    MyVisualScriptLogicProvider.PlaySingleSoundAtPosition("WepSmallWarheadExpl", _block.PositionComp.WorldAABB.Center);
+                    break;
+
+                case "impulse_fire":
+                    MyVisualScriptLogicProvider.PlaySingleSoundAtPosition("WepSmallWarheadExpl", _block.PositionComp.WorldAABB.Center);
+                    break;
+
+                case "storm_end":
+                    _weatherTimer = 0;
+                    StopImpulse();
+                    SetRotationTarget("StateSync: storm_end");
+                    break;
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────
         //  CLEANUP
         // ──────────────────────────────────────────────────────────
 
@@ -1040,6 +1203,12 @@ namespace PhantombiteArtefact.Modules
         {
             _logger?.Debug(MODULE, "Controller geschlossen — ID=" + _artefactId);
             try { _chargeEmitter?.StopSound(true); _chargeEmitter?.Cleanup(); } catch { }
+            try
+            {
+                if (!MyAPIGateway.Multiplayer.IsServer)
+                    MyAPIGateway.Multiplayer.UnregisterMessageHandler(STATE_SYNC_PACKET, OnStateSyncReceived);
+            }
+            catch { }
             base.Close();
         }
     }
