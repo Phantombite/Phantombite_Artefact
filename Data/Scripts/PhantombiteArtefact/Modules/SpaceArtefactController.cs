@@ -23,6 +23,12 @@ namespace PhantombiteArtefact.Modules
         private const string MODULE = "Artefact_Controller";
 
         // ──────────────────────────────────────────────────────────
+        //  INSTANZ-REGISTRY (für Session-Zugriff auf dem Server)
+        // ──────────────────────────────────────────────────────────
+        internal static readonly Dictionary<long, ArtefactController> Instances =
+            new Dictionary<long, ArtefactController>();
+
+        // ──────────────────────────────────────────────────────────
         //  STATE-SYNC (Server → Client)
         //  Format: "entityId|cmd"
         //  cmd: "on" / "off" / "reset" / "storm_start" / "storm_end"
@@ -61,7 +67,8 @@ namespace PhantombiteArtefact.Modules
         private int   _triggerChance     = 20;
 
         private int COOLDOWN_TICKS => _weatherDuration * 60;
-        private const int CHECK_INTERVAL         = 30;
+        private const int CHECK_INTERVAL         = 30;  // Basis: alle 30 Frames (PerfLevel 0)
+        // PerfLevel 1: 60 Frames | PerfLevel 2: 150 Frames | PerfLevel 3: 300 Frames
         private const int CHARGE_STEP_TICKS      = 60;
         private const int AFTERSHOCK_STEP_TICKS  = 40;
         private const int AFTERSHOCK_PAUSE_TICKS = 360;
@@ -186,9 +193,14 @@ namespace PhantombiteArtefact.Modules
             _block = Entity as IMyFunctionalBlock;
             if (_block == null) return;
 
-            // State-Sync Paket registrieren (Client empfängt vom Server)
+            // Hinweis: Chat-Pakete werden von ArtefactChatModule (Session-Ebene) empfangen.
+            // State-Sync für non-msg Befehle (on/off/reset etc.) bleibt hier auf Block-Ebene.
             if (!MyAPIGateway.Multiplayer.IsServer)
-                MyAPIGateway.Multiplayer.RegisterMessageHandler(STATE_SYNC_PACKET, OnStateSyncReceived);
+                MyAPIGateway.Multiplayer.RegisterSecureMessageHandler(STATE_SYNC_PACKET, OnStateSyncReceived);
+
+            // Auf dem Server in Registry eintragen (für ArtefactRandomTimerModule)
+            if (MyAPIGateway.Multiplayer.IsServer)
+                Instances[Entity.EntityId] = this;
 
             NeedsUpdate = MyEntityUpdateEnum.EACH_FRAME;
         }
@@ -206,7 +218,7 @@ namespace PhantombiteArtefact.Modules
                 {
                     _block.CustomData = DEFAULT_CONFIG;
                     data = DEFAULT_CONFIG;
-                    _logger?.Trace(MODULE, "Custom Data leer — Default Config geschrieben");
+                    _logger?.Log(MODULE, "Custom Data leer — Default Config geschrieben", 2);
                 }
 
                 foreach (var line in data.Split('\n'))
@@ -236,7 +248,7 @@ namespace PhantombiteArtefact.Modules
                     }
                 }
 
-                _logger?.Debug(MODULE, "Config geladen — " +
+                _logger?.Log(MODULE, "Config geladen — " +
                     "ID=" + _artefactId +
                     " Status=" + (_active ? "on" : "off") +
                     " TriggerRange=" + _rangeTrigger + "m" +
@@ -247,7 +259,7 @@ namespace PhantombiteArtefact.Modules
                     " DrainRange=" + _batteryDrainRange + "m" +
                     " WeatherDuration=" + _weatherDuration + "s" +
                     " TriggerInterval=" + _triggerInterval + " Ticks" +
-                    " TriggerChance=" + _triggerChance + "%");
+                    " TriggerChance=" + _triggerChance + "%", 1);
             }
             catch { }
         }
@@ -268,7 +280,7 @@ namespace PhantombiteArtefact.Modules
                         result.AppendLine(line);
                 }
                 _block.CustomData = result.ToString().TrimEnd();
-                _logger?.Trace(MODULE, "Status in Custom Data gespeichert: " + (active ? "on" : "off"));
+                _logger?.Log(MODULE, "Status gespeichert: " + (active ? "on" : "off"), 2);
             }
             catch { }
         }
@@ -306,15 +318,15 @@ namespace PhantombiteArtefact.Modules
                 {
                     SetAllEmissive(COLOR_GREEN, _glowIntensity);
                     SetRotationTarget("Init — aktiv");
-                    _logger?.Debug(MODULE, "Start: IDLE — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING + " Global=" + ROT_IDLE_GLOB);
+                    _logger?.Log(MODULE, "Start: IDLE — Aktiv", 1);
                 }
                 else
                 {
-                    _logger?.Debug(MODULE, "Start: INAKTIV — Glow: SCHWARZ");
+                    _logger?.Log(MODULE, "Start: INAKTIV", 1);
                 }
 
                 _randomTimer = _triggerInterval;
-                _logger?.Trace(MODULE, "Random-Timer init: " + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h)");
+                _logger?.Log(MODULE, "Random-Timer init: " + (_randomTimer / 60 / 60) + "h", 1);
                 return;
             }
 
@@ -337,7 +349,7 @@ namespace PhantombiteArtefact.Modules
             {
                 _weatherTimer--;
                 if (_weatherTimer % 600 == 0 && _weatherTimer > 0)
-                    _logger?.Trace(MODULE, "Wetter laeuft noch: " + (_weatherTimer / 60) + "s — Cooldown: " + (_cooldown / 60) + "s");
+                    _logger?.Log(MODULE, "Wetter läuft: " + (_weatherTimer / 60) + "s — Cooldown: " + (_cooldown / 60) + "s", 2);
             }
             if (_cooldown > 0) _cooldown--;
 
@@ -350,7 +362,7 @@ namespace PhantombiteArtefact.Modules
             // TRACE: Glow-Puls Geschwindigkeit geändert (nur wenn Wechsel)
             if (Math.Abs(glowTarget - _lastGlowTarget) > 0.001f)
             {
-                _logger?.Trace(MODULE, "Glow-Puls geaendert: " + _lastGlowTarget.ToString("F3") + " -> " + glowTarget.ToString("F3") + " (Grund: " + (WeatherActive ? "Wetter aktiv" : "IDLE") + ")");
+                _logger?.Log(MODULE, "Glow: " + _lastGlowTarget.ToString("F3") + " → " + glowTarget.ToString("F3"), 2);
                 _lastGlowTarget = glowTarget;
             }
 
@@ -358,16 +370,19 @@ namespace PhantombiteArtefact.Modules
             UpdateImpulse();
             UpdateRandomMessages();
 
-            if (_frameTick % CHECK_INTERVAL == 0)
+            // PerfLevel bestimmt wie oft Spieler-Check + DOT läuft
+            int perfLevel = _logger?.PerfLevel ?? 0;
+            int checkInterval = perfLevel >= 1 ? CHECK_INTERVAL * 2 : CHECK_INTERVAL;
+
+            if (_frameTick % checkInterval == 0)
             {
                 UpdatePlayerCheck();
-                UpdateRandomTimer();
                 if (WeatherActive) ApplyDot();
             }
 
             if (!WeatherActive && _impulsePhase == ImpulsePhase.Aftershock)
             {
-                _logger?.Debug(MODULE, "Wetter beendet — Nachbeben gestoppt — Zustand: IDLE");
+                _logger?.Log(MODULE, "Wetter beendet — Zustand: IDLE", 1);
                 StopImpulse();
                 _shockwaveFired = false;
             }
@@ -412,7 +427,7 @@ namespace PhantombiteArtefact.Modules
             // TRACE: nur bei Änderung
             if (Math.Abs(newRing - _lastRotTarget) > 0.01f || grund != _lastRotGrund)
             {
-                _logger?.Trace(MODULE, "Rotation -> Ring=" + newRing + " Global=" + newGlob + " — Grund: " + grund);
+                _logger?.Log(MODULE, "Rotation: Ring=" + newRing + " Glob=" + newGlob, 2);
                 _lastRotTarget = newRing;
                 _lastRotGrund  = grund;
             }
@@ -442,7 +457,7 @@ namespace PhantombiteArtefact.Modules
                     if (dist > _rangeDot) continue;
 
                     p.Character.DoDamage(_dotDamagePerTick, MyStringHash.GetOrCompute("Energy"), true);
-                    _logger?.Debug(MODULE, "DOT: " + p.DisplayName + " — " + dist.ToString("F1") + "m — " + (_dotDamagePerTick * 2f) + " HP/s");
+                    _logger?.Log(MODULE, "DOT: " + p.DisplayName + " — " + dist.ToString("F1") + "m — " + (_dotDamagePerTick * 2f) + " HP/s", 1);
                 }
             }
             catch { }
@@ -457,18 +472,18 @@ namespace PhantombiteArtefact.Modules
             float closest = GetClosestPlayerDistance();
             bool  inRange = closest <= _rangeTrigger;
 
-            _logger?.Trace(MODULE, "Spieler-Check: " +
+            _logger?.Log(MODULE, "Spieler-Check: " +
                 (closest == float.MaxValue ? "kein Spieler" : closest.ToString("F1") + "m") +
                 " | inRange=" + inRange +
                 " | ShockwaveFired=" + _shockwaveFired +
                 " | Cooldown=" + (_cooldown / 60) + "s" +
                 " | Wetter=" + WeatherActive +
-                " | Phase=" + _impulsePhase);
+                " | Phase=" + _impulsePhase, 1);
 
             if (!inRange && _playerInRange)
             {
                 _shockwaveFired = false;
-                _logger?.Trace(MODULE, "Spieler hat Reichweite verlassen — ShockwaveFired=false");
+                _logger?.Log(MODULE, "Spieler hat Reichweite verlassen — ShockwaveFired=false", 1);
             }
 
             _playerInRange = inRange;
@@ -480,14 +495,14 @@ namespace PhantombiteArtefact.Modules
                 {
                     _shockwaveFired  = true;
                     _isRandomTrigger = false;
-                    _logger?.Debug(MODULE, "SPIELER-TRIGGER — Distanz: " + closest.ToString("F1") + "m — Aufladung startet");
+                    _logger?.Log(MODULE, "SPIELER-TRIGGER — Distanz: " + closest.ToString("F1") + "m — Aufladung startet", 1);
                     ShowAlienMessage(false);
                     StartChargeImpulse();
                 }
             }
             else if (_playerInRange && _cooldown > 0)
             {
-                _logger?.Trace(MODULE, "Spieler in Reichweite — Cooldown aktiv: " + (_cooldown / 60) + "s verbleibend — kein Trigger");
+                _logger?.Log(MODULE, "Spieler in Reichweite — Cooldown aktiv: " + (_cooldown / 60) + "s verbleibend — kein Trigger", 1);
             }
 
             SetRotationTarget("Spieler-Check");
@@ -499,12 +514,15 @@ namespace PhantombiteArtefact.Modules
 
         private void UpdateRandomTimer()
         {
+            // PerfLevel 2+: Random-Timer pausiert — kein automatisches Event
+            if (_logger != null && _logger.PerfLevel >= 2) return;
+
             if (WeatherActive || _impulsePhase != ImpulsePhase.Idle || _randomMsgActive) return;
 
             _randomTimer -= CHECK_INTERVAL;
 
             if (_frameTick % 600 == 0)
-                _logger?.Trace(MODULE, "Random-Timer: " + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h " + (_randomTimer / 60 % 60) + "m verbleibend)");
+                _logger?.Log(MODULE, "Random-Timer: " + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h " + (_randomTimer / 60 % 60) + "m verbleibend)", 1);
 
             if (_randomTimer > 0) return;
 
@@ -513,9 +531,9 @@ namespace PhantombiteArtefact.Modules
             int  roll      = _rng.Next(0, 100);
             bool triggered = roll < _triggerChance;
 
-            _logger?.Debug(MODULE, "Random-Wuerfel: " + roll + " (Chance=" + _triggerChance + "%) — " +
+            _logger?.Log(MODULE, "Random-Wuerfel: " + roll + " (Chance=" + _triggerChance + "%) — " +
                 (triggered ? "GETRIGGERT" : "nicht getriggert") +
-                " — Timer neu: " + _triggerInterval + " Ticks (" + (_triggerInterval / 60 / 60) + "h)");
+                " — Timer neu: " + _triggerInterval + " Ticks (" + (_triggerInterval / 60 / 60) + "h)", 1);
 
             if (!triggered) return;
 
@@ -526,11 +544,11 @@ namespace PhantombiteArtefact.Modules
 
             if (players.Count == 0)
             {
-                _logger?.Trace(MODULE, "Random-Trigger abgebrochen — keine Spieler online");
+                _logger?.Log(MODULE, "Random-Trigger abgebrochen — keine Spieler online", 1);
                 return;
             }
 
-            _logger?.Debug(MODULE, "RANDOM-TRIGGER — " + players.Count + " Spieler online — Nachrichtensequenz startet");
+            _logger?.Log(MODULE, "RANDOM-TRIGGER — " + players.Count + " Spieler online — Nachrichtensequenz startet", 1);
             _isRandomTrigger = true;
             ShowAlienMessage(true);
         }
@@ -568,17 +586,17 @@ namespace PhantombiteArtefact.Modules
             {
                 if (!isRandom)
                 {
-                    MyAPIGateway.Utilities.ShowNotification(MSG_PLAYER, 6000, MyFontEnum.Red);
-                    _logger?.Trace(MODULE, "Alien-Nachricht gesendet (Spieler-Trigger)");
+                    BroadcastMessage(MSG_PLAYER);
+                    _logger?.Log(MODULE, "Alien-Nachricht gesendet (Spieler-Trigger)", 1);
                 }
                 else
                 {
                     _randomMsgIndex  = 0;
                     _randomMsgTimer  = 0;
                     _randomMsgActive = true;
-                    MyAPIGateway.Utilities.ShowNotification(MSG_RANDOM_SEQUENCE[0], 2500, MyFontEnum.Red);
+                    BroadcastMessage(MSG_RANDOM_SEQUENCE[0]);
                     _randomMsgIndex = 1;
-                    _logger?.Trace(MODULE, "Alien-Nachrichtensequenz gestartet (" + MSG_RANDOM_SEQUENCE.Length + " Nachrichten)");
+                    _logger?.Log(MODULE, "Alien-Nachrichtensequenz gestartet (" + MSG_RANDOM_SEQUENCE.Length + " Nachrichten)", 1);
                 }
             }
             catch { }
@@ -596,8 +614,8 @@ namespace PhantombiteArtefact.Modules
             {
                 try
                 {
-                    MyAPIGateway.Utilities.ShowNotification(MSG_RANDOM_SEQUENCE[_randomMsgIndex], 2500, MyFontEnum.Red);
-                    _logger?.Trace(MODULE, "Alien-Nachricht " + _randomMsgIndex + "/" + MSG_RANDOM_SEQUENCE.Length + " gesendet");
+                    BroadcastMessage(MSG_RANDOM_SEQUENCE[_randomMsgIndex]);
+                    _logger?.Log(MODULE, "Alien-Nachricht " + _randomMsgIndex + "/" + MSG_RANDOM_SEQUENCE.Length + " gesendet", 1);
                 }
                 catch { }
                 _randomMsgIndex++;
@@ -605,7 +623,7 @@ namespace PhantombiteArtefact.Modules
             else
             {
                 _randomMsgActive = false;
-                _logger?.Trace(MODULE, "Alien-Nachrichten abgeschlossen — Aufladung startet");
+                _logger?.Log(MODULE, "Alien-Nachrichten abgeschlossen — Aufladung startet", 1);
                 StartChargeImpulse();
             }
         }
@@ -622,9 +640,9 @@ namespace PhantombiteArtefact.Modules
                 Vector3D origin = _block.PositionComp.WorldAABB.Center;
                 float drainBase = Math.Min(_batteryDrainBase + (_hitCount - 1) * _batteryDrainStep, 0.95f);
 
-                _logger?.Debug(MODULE, "SCHOCKWELLE — Impuls #" + _hitCount +
+                _logger?.Log(MODULE, "SCHOCKWELLE — Impuls #" + _hitCount +
                     " — Drain: " + (drainBase * 100f).ToString("F1") + "%" +
-                    " — Wetter: " + _weatherDuration + "s");
+                    " — Wetter: " + _weatherDuration + "s", 1);
 
                 DrainNearbyBatteries(origin, drainBase);
 
@@ -634,14 +652,14 @@ namespace PhantombiteArtefact.Modules
                         WEATHER_ARTEFACT, 0f,
                         _block.PositionComp.WorldAABB.Center,
                         false, Vector3D.Zero, _weatherDuration, 1f);
-                    _logger?.Debug(MODULE, "WETTER aktiviert: ArtefactStorm fuer " + _weatherDuration + "s");
+                    _logger?.Log(MODULE, "WETTER aktiviert: ArtefactStorm fuer " + _weatherDuration + "s", 1);
                 }
                 catch { }
 
                 _weatherTimer = _weatherDuration * 60;
                 _cooldown     = COOLDOWN_TICKS;
 
-                _logger?.Trace(MODULE, "WeatherTimer=" + _weatherTimer + " Ticks — Cooldown=" + _cooldown + " Ticks");
+                _logger?.Log(MODULE, "WeatherTimer=" + _weatherTimer + " Ticks — Cooldown=" + _cooldown + " Ticks", 1);
 
                 BroadcastState("storm_start");
             }
@@ -685,10 +703,10 @@ namespace PhantombiteArtefact.Modules
 
                     gridCount++;
 
-                    _logger?.Trace(MODULE, "Drain: " + grid.DisplayName +
+                    _logger?.Log(MODULE, "Drain: " + grid.DisplayName +
                         " (" + gridDist.ToString("F0") + "m)" +
                         " — " + (drainPct * 100f).ToString("F1") + "%" +
-                        " — " + batteries.Count + " Batterien");
+                        " — " + batteries.Count + " Batterien", 1);
 
                     foreach (var bat in batteries)
                     {
@@ -705,7 +723,7 @@ namespace PhantombiteArtefact.Modules
                     }
                 }
 
-                _logger?.Debug(MODULE, "Drain abgeschlossen — " + gridCount + " Grids — " + batteryCount + " Batterien — Drain: " + (drainBase * 100f).ToString("F1") + "%");
+                _logger?.Log(MODULE, "Drain abgeschlossen — " + gridCount + " Grids — " + batteryCount + " Batterien — Drain: " + (drainBase * 100f).ToString("F1") + "%", 1);
             }
             catch { }
         }
@@ -718,7 +736,7 @@ namespace PhantombiteArtefact.Modules
                 Vector3D origin  = _block.PositionComp.WorldAABB.Center;
                 float drainBase  = Math.Min(_batteryDrainBase + (_hitCount - 1) * _batteryDrainStep, 0.95f);
 
-                _logger?.Debug(MODULE, "NACHBEBEN — Impuls #" + _hitCount + " — Drain: " + (drainBase * 100f).ToString("F1") + "%");
+                _logger?.Log(MODULE, "NACHBEBEN — Impuls #" + _hitCount + " — Drain: " + (drainBase * 100f).ToString("F1") + "%", 1);
 
                 DrainNearbyBatteries(origin, drainBase);
                 BroadcastState("impulse_fire");
@@ -765,9 +783,9 @@ namespace PhantombiteArtefact.Modules
             SetRotationTarget("Aufladung");
             BroadcastState("charge_start");
 
-            _logger?.Debug(MODULE, "AUFLADUNG gestartet — Zustand: AUFLADEN" +
+            _logger?.Log(MODULE, "AUFLADUNG gestartet — Zustand: AUFLADEN" +
                 " — Rotation: Ring=" + ROT_CHARGE_RING + " Global=" + ROT_CHARGE_GLOB +
-                " — Glow: ROT wandert Center->Inner->Middle->Outer");
+                " — Glow: ROT wandert Center->Inner->Middle->Outer", 1);
         }
 
         private void StartAftershock()
@@ -782,9 +800,9 @@ namespace PhantombiteArtefact.Modules
             PlayChargeSound();
             SetRotationTarget("Nachbeben");
 
-            _logger?.Debug(MODULE, "NACHBEBEN gestartet — Zustand: WETTER" +
+            _logger?.Log(MODULE, "NACHBEBEN gestartet — Zustand: WETTER" +
                 " — Rotation: Ring=" + ROT_STORM_RING + " Global=" + ROT_STORM_GLOB +
-                " — Pause zwischen Impulsen: " + (AFTERSHOCK_PAUSE_TICKS / 60f).ToString("F1") + "s");
+                " — Pause zwischen Impulsen: " + (AFTERSHOCK_PAUSE_TICKS / 60f).ToString("F1") + "s", 1);
         }
 
         private void StopImpulse()
@@ -796,12 +814,12 @@ namespace PhantombiteArtefact.Modules
             {
                 SetAllEmissive(COLOR_GREEN, _glowIntensity);
                 SetRotationTarget("Impuls gestoppt");
-                _logger?.Debug(MODULE, "IMPULS gestoppt — Zustand: IDLE" +
-                    " — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING + " Global=" + ROT_IDLE_GLOB);
+                _logger?.Log(MODULE, "IMPULS gestoppt — Zustand: IDLE" +
+                    " — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING + " Global=" + ROT_IDLE_GLOB, 1);
             }
             else
             {
-                _logger?.Debug(MODULE, "IMPULS gestoppt — Artefakt inaktiv — kein Glow/Rotation Reset");
+                _logger?.Log(MODULE, "IMPULS gestoppt — Artefakt inaktiv — kein Glow/Rotation Reset", 1);
             }
         }
 
@@ -821,7 +839,7 @@ namespace PhantombiteArtefact.Modules
                     _impulseStep  = 0;
                     _impulseTimer = _stepDuration;
                     PlayChargeSound();
-                    _logger?.Trace(MODULE, "Nachbeben-Pause beendet — neuer Impuls startet bei Step 0 (Center)");
+                    _logger?.Log(MODULE, "Nachbeben-Pause beendet — neuer Impuls startet bei Step 0 (Center)", 1);
                 }
                 return;
             }
@@ -841,10 +859,17 @@ namespace PhantombiteArtefact.Modules
                     if (_impulseTimer == _stepDuration)
                     {
                         StopChargeSound();
+                        // PerfLevel 3: Animation läuft, aber kein Batterie-Drain
+                        bool fireDamage = _logger == null || _logger.PerfLevel < 3;
                         if (_impulsePhase == ImpulsePhase.Charging)
-                            FireShockwave();
+                        {
+                            if (fireDamage) FireShockwave();
+                            else _logger?.Log(MODULE, "Impulse: Batterie-Drain übersprungen (PerfLevel 3)", 1);
+                        }
                         else
-                            FireAftershockImpulse();
+                        {
+                            if (fireDamage) FireAftershockImpulse();
+                        }
                     }
                     break;
             }
@@ -858,7 +883,7 @@ namespace PhantombiteArtefact.Modules
             if (_impulseTimer > 0) return;
 
             string currentStep = _impulseStep < STEP_NAMES.Length ? STEP_NAMES[_impulseStep] : "?";
-            _logger?.Trace(MODULE, "Impuls Step " + _impulseStep + " (" + currentStep + ") abgeschlossen");
+            _logger?.Log(MODULE, "Impuls Step " + _impulseStep + " (" + currentStep + ") abgeschlossen", 1);
 
             _impulseStep++;
 
@@ -866,7 +891,7 @@ namespace PhantombiteArtefact.Modules
             {
                 _impulseTimer = _stepDuration;
                 string nextStep = _impulseStep < STEP_NAMES.Length ? STEP_NAMES[_impulseStep] : "?";
-                _logger?.Trace(MODULE, "Impuls Step " + _impulseStep + " (" + nextStep + ") startet — Glow ROT an " + nextStep);
+                _logger?.Log(MODULE, "Impuls Step " + _impulseStep + " (" + nextStep + ") startet — Glow ROT an " + nextStep, 1);
                 return;
             }
 
@@ -878,7 +903,7 @@ namespace PhantombiteArtefact.Modules
             {
                 _impulsePause = true;
                 _impulseTimer = _pauseDuration;
-                _logger?.Trace(MODULE, "Nachbeben-Pause: " + (AFTERSHOCK_PAUSE_TICKS / 60f).ToString("F1") + "s — Wetter noch: " + (_weatherTimer / 60) + "s");
+                _logger?.Log(MODULE, "Nachbeben-Pause: " + (AFTERSHOCK_PAUSE_TICKS / 60f).ToString("F1") + "s — Wetter noch: " + (_weatherTimer / 60) + "s", 1);
             }
             else
             {
@@ -897,7 +922,7 @@ namespace PhantombiteArtefact.Modules
                 if (_chargeSoundActive) return;
                 _chargeEmitter.PlaySingleSound(new MySoundPair("ShipJumpDriveCharging"), stopPrevious: true);
                 _chargeSoundActive = true;
-                _logger?.Trace(MODULE, "LadeSound gestartet");
+                _logger?.Log(MODULE, "LadeSound gestartet", 1);
             }
             catch { }
         }
@@ -909,7 +934,7 @@ namespace PhantombiteArtefact.Modules
                 if (!_chargeSoundActive) return;
                 _chargeEmitter.StopSound(forced: true);
                 _chargeSoundActive = false;
-                _logger?.Trace(MODULE, "LadeSound gestoppt");
+                _logger?.Log(MODULE, "LadeSound gestoppt", 1);
             }
             catch { }
         }
@@ -980,7 +1005,7 @@ namespace PhantombiteArtefact.Modules
             if (_active && target == Entity)
             {
                 info.Amount = 0f;
-                _logger?.Trace(MODULE, "Schaden blockiert — Artefakt unzerstoerbar waehrend aktiv");
+                _logger?.Log(MODULE, "Schaden blockiert — Artefakt unzerstoerbar waehrend aktiv", 1);
             }
         }
 
@@ -997,7 +1022,7 @@ namespace PhantombiteArtefact.Modules
             }
 
             string ziel = allTarget ? "all" : (hasId ? "ID=" + targetId : "ID=0");
-            _logger?.Debug(MODULE, "Command: '" + cmd + "' — Ziel: " + ziel);
+            _logger?.Log(MODULE, "Command: '" + cmd + "' — Ziel: " + ziel, 1);
 
             switch (cmd)
             {
@@ -1017,7 +1042,7 @@ namespace PhantombiteArtefact.Modules
                     SetAllEmissive(COLOR_GREEN, _glowIntensity);
                     SetRotationTarget("Command: on");
                     BroadcastState("on");
-                    _logger?.Debug(MODULE, "AKTIVIERT — Zustand: IDLE — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING);
+                    _logger?.Log(MODULE, "AKTIVIERT — Zustand: IDLE — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING, 1);
                     break;
 
                 case "off":
@@ -1039,7 +1064,7 @@ namespace PhantombiteArtefact.Modules
                     SetAllEmissive(Color.Black, 0f);
                     try { MyAPIGateway.Session.WeatherEffects.RemoveWeather(_block.PositionComp.WorldAABB.Center); } catch { }
                     BroadcastState("off");
-                    _logger?.Debug(MODULE, "DEAKTIVIERT — Zustand: INAKTIV — Glow: SCHWARZ — Rotation: 0 — Wetter entfernt");
+                    _logger?.Log(MODULE, "DEAKTIVIERT — Zustand: INAKTIV — Glow: SCHWARZ — Rotation: 0 — Wetter entfernt", 1);
                     break;
 
                 case "reset":
@@ -1065,24 +1090,24 @@ namespace PhantombiteArtefact.Modules
                     SetAllEmissive(COLOR_GREEN, _glowIntensity);
                     SetRotationTarget("Command: reset");
                     BroadcastState("reset");
-                    _logger?.Debug(MODULE, "RESET — Wetter entfernt — Impulse gestoppt — zurück zu IDLE" +
+                    _logger?.Log(MODULE, "RESET — Wetter entfernt — Impulse gestoppt — zurück zu IDLE" +
                         " — Glow: GRUEN — Rotation: Ring=" + ROT_IDLE_RING +
-                        " — RandomTimer=" + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h)");
+                        " — RandomTimer=" + _randomTimer + " Ticks (" + (_randomTimer / 60 / 60) + "h)", 1);
                     break;
 
                 case "trigger":
                     if (!_active)
                     {
-                        _logger?.Debug(MODULE, "Command 'trigger' abgelehnt — Artefakt inaktiv");
+                        _logger?.Log(MODULE, "Command 'trigger' abgelehnt — Artefakt inaktiv", 1);
                         break;
                     }
                     if (_impulsePhase != ImpulsePhase.Idle)
                     {
-                        _logger?.Debug(MODULE, "Command 'trigger' abgelehnt — Phase=" + _impulsePhase + " bereits aktiv");
+                        _logger?.Log(MODULE, "Command 'trigger' abgelehnt — Phase=" + _impulsePhase + " bereits aktiv", 1);
                         break;
                     }
                     _isRandomTrigger = false;
-                    _logger?.Debug(MODULE, "MANUELL-TRIGGER — Aufladung startet sofort");
+                    _logger?.Log(MODULE, "MANUELL-TRIGGER — Aufladung startet sofort", 1);
                     ShowAlienMessage(false);
                     StartChargeImpulse();
                     break;
@@ -1105,13 +1130,34 @@ namespace PhantombiteArtefact.Modules
                 string msg = Entity.EntityId + "|" + cmd;
                 byte[] data = System.Text.Encoding.UTF8.GetBytes(msg);
                 MyAPIGateway.Multiplayer.SendMessageToOthers(STATE_SYNC_PACKET, data);
-                _logger?.Trace(MODULE, "State-Sync gesendet: " + msg);
+                _logger?.Log(MODULE, "State-Sync gesendet: " + msg, 1);
             }
             catch { }
         }
 
-        private void OnStateSyncReceived(byte[] data)
+        private void BroadcastMessage(string text)
         {
+            try
+            {
+                if (!MyAPIGateway.Multiplayer.IsServer) return;
+
+                // An alle anderen Clients senden
+                string packet = Entity.EntityId + "|msg|" + text;
+                byte[] data = System.Text.Encoding.UTF8.GetBytes(packet);
+                MyAPIGateway.Multiplayer.SendMessageToOthers(STATE_SYNC_PACKET, data);
+
+                // Auf Listen-Server auch lokal anzeigen (auf Dedicated gibt es keinen lokalen Spieler)
+                if (!MyAPIGateway.Utilities.IsDedicated)
+                    MyAPIGateway.Utilities.ShowMessage("[ Artefakt ]", text);
+
+                _logger?.Log(MODULE, "Nachricht gesendet: " + text, 1);
+            }
+            catch { }
+        }
+
+        private void OnStateSyncReceived(ushort handler, byte[] data, ulong senderId, bool fromServer)
+        {
+            if (!fromServer) return;
             try
             {
                 string msg = System.Text.Encoding.UTF8.GetString(data);
@@ -1122,13 +1168,18 @@ namespace PhantombiteArtefact.Modules
                 if (!long.TryParse(parts[0], out entityId)) return;
                 if (entityId != Entity.EntityId) return;
 
-                string cmd = parts[1];
-                ApplyStateClient(cmd);
+                string cmd   = parts[1];
+                string extra = parts.Length > 2 ? string.Join("|", parts, 2, parts.Length - 2) : "";
+
+                // "msg" wird von ArtefactChatModule (Session-Ebene) angezeigt
+                if (cmd == "msg") return;
+
+                ApplyStateClient(cmd, extra);
             }
             catch { }
         }
 
-        private void ApplyStateClient(string cmd)
+        private void ApplyStateClient(string cmd, string extra = "")
         {
             switch (cmd)
             {
@@ -1201,15 +1252,37 @@ namespace PhantombiteArtefact.Modules
 
         public override void Close()
         {
-            _logger?.Debug(MODULE, "Controller geschlossen — ID=" + _artefactId);
+            _logger?.Log(MODULE, "Controller geschlossen — ID=" + _artefactId, 1);
             try { _chargeEmitter?.StopSound(true); _chargeEmitter?.Cleanup(); } catch { }
             try
             {
                 if (!MyAPIGateway.Multiplayer.IsServer)
-                    MyAPIGateway.Multiplayer.UnregisterMessageHandler(STATE_SYNC_PACKET, OnStateSyncReceived);
+                    MyAPIGateway.Multiplayer.UnregisterSecureMessageHandler(STATE_SYNC_PACKET, OnStateSyncReceived);
+                else
+                    Instances.Remove(Entity.EntityId);
             }
             catch { }
             base.Close();
         }
+
+        // ──────────────────────────────────────────────────────────
+        //  INTERNER AUFRUF vom ArtefactRandomTimerModule (Session)
+        // ──────────────────────────────────────────────────────────
+        internal void TriggerRandom()
+        {
+            if (!MyAPIGateway.Multiplayer.IsServer) return;
+            if (WeatherActive || _impulsePhase != ImpulsePhase.Idle || _randomMsgActive) return;
+
+            _logger?.Log(MODULE, "RANDOM-TRIGGER (von Session ausgelöst)", 1);
+            _isRandomTrigger = true;
+            ShowAlienMessage(true);
+        }
+
+        // Config-Werte für ArtefactRandomTimerModule lesbar machen
+        internal int   TriggerInterval  => _triggerInterval;
+        internal int   TriggerChance    => _triggerChance;
+        internal int   WeatherDuration  => _weatherDuration;
+        internal bool  IsActive         => _active;
+        internal Vector3D BlockPosition => _block?.PositionComp.WorldAABB.Center ?? Vector3D.Zero;
     }
 }

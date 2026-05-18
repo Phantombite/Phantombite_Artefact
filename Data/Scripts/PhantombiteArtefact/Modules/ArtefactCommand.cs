@@ -32,12 +32,15 @@ namespace PhantombiteArtefact.Modules
         private const long ARTEFACT_CHANNEL = 1995001L;
         private const long LOG_CHANNEL      = 1995999L;
         private const string MOD_NAME       = "Phantombite_Artefact";
+        private const string VERSION         = "1.1.0";
 
         private bool _initialized = false;
 
-        // Log-Level vom Core — nur senden was Core wirklich will
         private enum LogLevel { Normal = 0, Debug = 1, Trace = 2 }
         private LogLevel _logLevel = LogLevel.Normal;
+
+        /// <summary>0=voll, 1=Check/2Frames, 2=Check/5Frames, 3=Check/10Frames</summary>
+        public int PerfLevel { get; private set; } = 0;
 
         // ── IModule ──────────────────────────────────────────────────────────
 
@@ -72,18 +75,30 @@ namespace PhantombiteArtefact.Modules
 
                 if (msg == "READY")
                 {
-                    MyLog.Default.WriteLineAndConsole("[PhantombiteArtefact] Artefact_Command: Core READY empfangen");
+                    Log("Artefact_Command", "Core READY empfangen");
                     RegisterWithCore();
                     return;
                 }
 
                 if (msg.StartsWith("LOGLEVEL|"))
                 {
-                    string levelStr = msg.Substring(9).ToLower();
-                    _logLevel = levelStr == "trace" ? LogLevel.Trace
-                              : levelStr == "debug" ? LogLevel.Debug
-                              : LogLevel.Normal;
-                    MyLog.Default.WriteLineAndConsole("[PhantombiteArtefact] Artefact_Command: LogLevel gesetzt: " + _logLevel);
+                    int lvl;
+                    if (int.TryParse(msg.Substring(9), out lvl))
+                        _logLevel = (LogLevel)Math.Min(lvl, 2);
+                    else { string s = msg.Substring(9).ToLower(); _logLevel = s == "trace" ? LogLevel.Trace : s == "debug" ? LogLevel.Debug : LogLevel.Normal; }
+                    Log("Artefact_Command", "LOGLEVEL gesetzt: " + (int)_logLevel, 1);
+                    return;
+                }
+
+                if (msg.StartsWith("PERFLEVEL|"))
+                {
+                    int lvl;
+                    if (int.TryParse(msg.Substring(10), out lvl))
+                    {
+                        PerfLevel = Math.Max(0, Math.Min(3, lvl));
+                        Log("Artefact_Command", "PERFLEVEL gesetzt: " + PerfLevel, 1);
+                        MyAPIGateway.Utilities.SendModMessage(CORE_CHANNEL, "PERFACK|artefact|" + PerfLevel);
+                    }
                     return;
                 }
 
@@ -100,31 +115,25 @@ namespace PhantombiteArtefact.Modules
 
         public void Warn(string module, string message)
         {
+            MyLog.Default.WriteLineAndConsole("[PhantombiteArtefact] [WARN] [" + module + "] " + message);
             SendLog("WARN", module, message);
         }
 
         public void Error(string module, string message)
         {
+            MyLog.Default.WriteLineAndConsole("[PhantombiteArtefact] [ERROR] [" + module + "] " + message);
             SendLog("ERROR", module, message);
         }
 
-        public void Info(string module, string message)
+        public void Log(string module, string message, int level = 0)
         {
-            if (_logLevel < LogLevel.Debug) return;
-            SendLog("INFO", module, message);
+            if (level > 0 && (int)_logLevel < level) return;
+            MyLog.Default.WriteLineAndConsole("[PhantombiteArtefact] [" + level + "] [" + module + "] " + message);
+            SendLog(level.ToString(), module, message);
         }
 
-        public void Debug(string module, string message)
-        {
-            if (_logLevel < LogLevel.Debug) return;
-            SendLog("DEBUG", module, message);
-        }
-
-        public void Trace(string module, string message)
-        {
-            if (_logLevel < LogLevel.Trace) return;
-            SendLog("TRACE", module, message);
-        }
+        public void HeavyStart(string op) { try { MyAPIGateway.Utilities.SendModMessage(CORE_CHANNEL, "HEAVY_START|artefact|" + op); } catch { } }
+        public void HeavyEnd(string op)   { try { MyAPIGateway.Utilities.SendModMessage(CORE_CHANNEL, "HEAVY_END|artefact|" + op);   } catch { } }
 
         private void SendLog(string level, string module, string message)
         {
@@ -146,6 +155,7 @@ namespace PhantombiteArtefact.Modules
                 string msg = "REGISTER"
                     + "|artefact"
                     + "|Space Artefact Steuerung"
+                    + "|" + VERSION
                     + "|" + ARTEFACT_CHANNEL
                     + "|on:1:Artefakt aktivieren (!pbc artefact [ID] on)"
                     + "|off:1:Artefakt deaktivieren (!pbc artefact [ID] off)"
@@ -153,7 +163,7 @@ namespace PhantombiteArtefact.Modules
                     + "|trigger:1:Schockwelle auslösen (!pbc artefact [ID] trigger)";
 
                 MyAPIGateway.Utilities.SendModMessage(CORE_CHANNEL, msg);
-                MyLog.Default.WriteLineAndConsole("[PhantombiteArtefact] Artefact_Command: Registrierung an Core gesendet");
+                Log("Artefact_Command", "Registrierung an Core gesendet");
             }
             catch (Exception ex)
             {
@@ -186,7 +196,7 @@ namespace PhantombiteArtefact.Modules
                 string[] args = new string[argEnd - 2];
                 Array.Copy(parts, 2, args, 0, args.Length);
 
-                MyLog.Default.WriteLineAndConsole("[PhantombiteArtefact] Artefact_Command: Command empfangen: " + command);
+                Log("Artefact_Command", "Command empfangen: " + command, 1);
                 ExecuteOnBlocks(command, args, steamId);
             }
             catch (Exception ex)
@@ -245,7 +255,7 @@ namespace PhantombiteArtefact.Modules
                 }
 
                 // CMDRESULT zurück an Core
-                string status  = executed ? "ok" : "fail";
+                string status  = executed ? "ok" : "error";
                 string target  = allTarget ? "alle" : (hasId ? "ID " + targetId : "ID 0");
                 string message = executed
                     ? "Artefact " + target + ": " + command + " ausgeführt"
@@ -253,7 +263,7 @@ namespace PhantombiteArtefact.Modules
 
                 string result = "CMDRESULT|artefact|" + command + "|" + argsJoined + "|" + steamId + "|" + status + "|" + message;
                 MyAPIGateway.Utilities.SendModMessage(CORE_CHANNEL, result);
-                MyLog.Default.WriteLineAndConsole("[PhantombiteArtefact] Artefact_Command: CMDRESULT gesendet: " + status);
+                Log("Artefact_Command", "CMDRESULT gesendet: " + status, 1);
             }
             catch (Exception ex)
             {

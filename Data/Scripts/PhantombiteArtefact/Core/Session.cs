@@ -50,6 +50,15 @@ namespace PhantombiteArtefact
                 // Artefact_Command: registriert sich beim Core
                 _commandModule = new ArtefactCommandModule();
                 _moduleManager.RegisterModule(_commandModule);
+
+                // ArtefactChat: empfängt Chat-Pakete auf Client-Seite (Session-Ebene,
+                // damit der Streaming-Radius des Blocks keine Rolle spielt)
+                _moduleManager.RegisterModule(new ArtefactChatModule());
+
+                // ArtefactRandomTimer: Random-Trigger läuft auf dem Server (Session-Ebene),
+                // damit der Timer nicht einfriert wenn kein Spieler in der Nähe ist
+                _moduleManager.RegisterModule(new ArtefactRandomTimerModule());
+
                 _moduleManager.InitAll();
 
                 MyLog.Default.WriteLineAndConsole("[" + MOD_NAME + "] BeforeStart completed.");
