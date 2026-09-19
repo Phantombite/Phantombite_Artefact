@@ -1,5 +1,14 @@
 # DEV History — PhantomBite Artefact
 
+## 2026-09-19 — Bereinigung
+- Zufalls-Timer erfasste Artefakte nur einmal 5 s nach dem Start: später platzierte lösten nie zufällig aus.
+  Der Timer gleicht sich jetzt bei jeder Prüfung mit den vorhandenen Artefakten ab.
+- Gemeinsamer Zufallsgenerator statt einem pro Artefakt (mehrere im selben Moment erzeugte würfelten identisch)
+- `ArtefactCommandModule` wird in `LoadData` initialisiert, damit das `READY` des Core je nach Ladereihenfolge
+  der Mods nicht verloren geht
+- Compile-Fehler behoben: fehlendes `using VRage.Game.ModAPI;` in `ArtefactRandomTimerModule.cs`
+- Offen: zwei ungenutzte Felder im Controller (`_isRandomTrigger`, `DelayedDamage`), nur Compile-Warnungen
+
 ## 2026-03-27 — v2.0.0 — Core-Anbindung + Logging
 
 ### Core-Anbindung
