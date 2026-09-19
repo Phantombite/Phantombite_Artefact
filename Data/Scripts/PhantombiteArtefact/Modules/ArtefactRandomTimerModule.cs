@@ -24,8 +24,11 @@ namespace PhantombiteArtefact.Modules
         {
             public long   EntityId;
             public int    Timer;
-            public Random Rng = new Random();
         }
+
+        // Ein gemeinsamer Zufallsgenerator: mehrere "new Random()" im selben Moment liefern dieselbe Folge,
+        // Artefakte würfelten dann identisch.
+        private readonly Random _rng = new Random();
 
         private readonly List<ArtefactEntry> _entries = new List<ArtefactEntry>();
         private int _frameTick = 0;
@@ -64,6 +67,28 @@ namespace PhantombiteArtefact.Modules
             _initialized = true;
         }
 
+        /// <summary>
+        /// Gleicht die Timer-Liste mit den vorhandenen Artefakten ab. Vorher wurden Artefakte nur einmal
+        /// 5 Sekunden nach dem Start erfasst — später platzierte lösten nie zufällig aus.
+        /// </summary>
+        private void SyncEntries()
+        {
+            foreach (var kv in ArtefactController.Instances)
+            {
+                bool known = false;
+                foreach (var e in _entries)
+                    if (e.EntityId == kv.Key) { known = true; break; }
+                if (known) continue;
+
+                _entries.Add(new ArtefactEntry { EntityId = kv.Key, Timer = kv.Value.TriggerInterval });
+                MyLog.Default.WriteLineAndConsole(
+                    "[PhantombiteArtefact] ArtefactRandomTimerModule: neues Artefakt — EntityId=" +
+                    kv.Key + " Interval=" + kv.Value.TriggerInterval + " Ticks");
+            }
+
+            _entries.RemoveAll(e => !ArtefactController.Instances.ContainsKey(e.EntityId));
+        }
+
         public void Update()
         {
             if (!MyAPIGateway.Multiplayer.IsServer) return;
@@ -81,6 +106,9 @@ namespace PhantombiteArtefact.Modules
             // Nur alle CHECK_INTERVAL Frames updaten
             if (_frameTick % CHECK_INTERVAL != 0) return;
 
+            // Später platzierte Artefakte aufnehmen, entfernte austragen
+            SyncEntries();
+
             foreach (var entry in _entries)
             {
                 ArtefactController controller;
@@ -96,7 +124,7 @@ namespace PhantombiteArtefact.Modules
                 // Timer abgelaufen — würfeln
                 entry.Timer = controller.TriggerInterval;
 
-                int  roll      = entry.Rng.Next(0, 100);
+                int  roll      = _rng.Next(0, 100);
                 bool triggered = roll < controller.TriggerChance;
 
                 MyLog.Default.WriteLineAndConsole(

@@ -32,6 +32,14 @@ namespace PhantombiteArtefact
             {
                 MyLog.Default.WriteLineAndConsole("[" + MOD_NAME + "] Session LoadData started...");
                 _moduleManager = new ModuleManager();
+
+                // Command-Modul schon hier registrieren und initialisieren (Kanal-Handler anlegen):
+                // Der Core sendet READY in seinem BeforeStart. Würde der Handler erst in unserem
+                // BeforeStart angelegt, ginge READY je nach Ladereihenfolge der Mods verloren.
+                _commandModule = new ArtefactCommandModule();
+                _moduleManager.RegisterModule(_commandModule);
+                _commandModule.Init();
+
                 _isInitialized = true;
                 MyLog.Default.WriteLineAndConsole("[" + MOD_NAME + "] Session LoadData completed.");
             }
@@ -47,9 +55,7 @@ namespace PhantombiteArtefact
 
             try
             {
-                // Artefact_Command: registriert sich beim Core
-                _commandModule = new ArtefactCommandModule();
-                _moduleManager.RegisterModule(_commandModule);
+                // Artefact_Command ist schon in LoadData registriert und initialisiert (siehe dort)
 
                 // ArtefactChat: empfängt Chat-Pakete auf Client-Seite (Session-Ebene,
                 // damit der Streaming-Radius des Blocks keine Rolle spielt)
